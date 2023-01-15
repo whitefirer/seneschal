@@ -1,0 +1,28 @@
+# Binaries
+*.exe
+
+# Frontend build
+web/static/
+web/frontend/node_modules/
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Test outputs
+test-output/
