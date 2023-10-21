@@ -1,0 +1,969 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
+	"goworkflow/workflow"
+)
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for now
+	},
+}
+
+// Handler handles HTTP requests
+type Handler struct {
+	hub          *WSHub
+	workflowsDir string
+	executions   map[string]*ExecutionDetail
+	execMu       sync.RWMutex
+}
+
+// NewHandler creates a new API handler
+func NewHandler(hub *WSHub, workflowsDir string) *Handler {
+	return &Handler{
+		hub:          hub,
+		workflowsDir: workflowsDir,
+		executions:   make(map[string]*ExecutionDetail),
+	}
+}
+
+// success returns a success response
+func success(data interface{}) APIResponse {
+	return APIResponse{
+		Success: true,
+		Data:    data,
+	}
+}
+
+// errorResp returns an error response
+func errorResp(msg string) APIResponse {
+	return APIResponse{
+		Success: false,
+		Error:   msg,
+	}
+}
+
+// writeJSON writes a JSON response
+func writeJSON(w http.ResponseWriter, status int, resp APIResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
+}
+
+// ListWorkflows returns a list of all workflows
+func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	entries, err := os.ReadDir(h.workflowsDir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+		return
+	}
+
+	var workflows []WorkflowInfo
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+			continue
+		}
+
+		path := filepath.Join(h.workflowsDir, name)
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		// Parse workflow to get metadata
+		wf, err := workflow.ParseFile(path)
+		version := ""
+		description := ""
+		steps := 0
+		variables := 0
+		if err == nil {
+			version = wf.Version
+			description = wf.Description
+			steps = len(wf.Steps)
+			variables = len(wf.Variables)
+		}
+
+		workflows = append(workflows, WorkflowInfo{
+			Name:        strings.TrimSuffix(name, filepath.Ext(name)),
+			FileName:    name,
+			Version:     version,
+			Description: description,
+			Steps:       steps,
+			Variables:   variables,
+			ModifiedAt:  info.ModTime(),
+			Size:        info.Size(),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, success(workflows))
+}
+
+// GetWorkflow returns a workflow's YAML content
+func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	name := mux.Vars(r)["name"]
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+		return
+	}
+
+	// Add .yaml extension if not present
+	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		name += ".yaml"
+	}
+
+	path := filepath.Join(h.workflowsDir, name)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, errorResp("Workflow not found"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, success(WorkflowContent{
+		Name:     strings.TrimSuffix(name, filepath.Ext(name)),
+		FileName: name,
+		Content:  string(content),
+	}))
+}
+
+// SaveWorkflow creates or updates a workflow
+func (h *Handler) SaveWorkflow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	name := mux.Vars(r)["name"]
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp("Invalid request body"))
+		return
+	}
+	defer r.Body.Close()
+
+	// Normalize line endings to Unix style
+	content := strings.ReplaceAll(string(body), "\r\n", "\n")
+
+	// Add .yaml extension if not present
+	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		name += ".yaml"
+	}
+
+	path := filepath.Join(h.workflowsDir, name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, success(map[string]string{
+		"path": path,
+	}))
+}
+
+// DeleteWorkflow deletes a workflow
+func (h *Handler) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	name := mux.Vars(r)["name"]
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+		return
+	}
+
+	// Add .yaml extension if not present
+	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		name += ".yaml"
+	}
+
+	path := filepath.Join(h.workflowsDir, name)
+	if err := os.Remove(path); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, success(nil))
+}
+
+// ValidateWorkflow validates a workflow YAML
+func (h *Handler) ValidateWorkflow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	name := mux.Vars(r)["name"]
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+		return
+	}
+
+	// Add .yaml extension if not present
+	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		name += ".yaml"
+	}
+
+	path := filepath.Join(h.workflowsDir, name)
+	wf, err := workflow.ParseFile(path)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
+		return
+	}
+
+	// Validate workflow
+	if errs := wf.Validate(); len(errs) > 0 {
+		var errMsgs []string
+		for _, e := range errs {
+			errMsgs = append(errMsgs, e.Error())
+		}
+		writeJSON(w, http.StatusBadRequest, errorResp(strings.Join(errMsgs, "; ")))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, success(map[string]interface{}{
+		"valid":     true,
+		"steps":     len(wf.Steps),
+		"variables": len(wf.Variables),
+	}))
+}
+
+// RunWorkflow executes a workflow
+func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	name := mux.Vars(r)["name"]
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+		return
+	}
+
+	// Parse request body
+	var req RunRequest
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			json.Unmarshal(body, &req)
+		}
+	}
+
+	// Add .yaml extension if not present
+	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		name += ".yaml"
+	}
+
+	path := filepath.Join(h.workflowsDir, name)
+	wf, err := workflow.ParseFile(path)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, errorResp("Workflow not found: "+err.Error()))
+		return
+	}
+
+	// Generate execution ID
+	executionID := fmt.Sprintf("exec-%s", time.Now().Format("20060102-150405"))
+
+	// Merge variables
+	vars := make(map[string]string)
+	for k, v := range wf.Variables {
+		vars[k] = v
+	}
+	for k, v := range req.Variables {
+		vars[k] = v
+	}
+
+	// Create execution record with pre-populated steps (including nested children)
+	
+	// Helper function to update step status recursively
+	var updateStepStatus func(steps []StepResult, stepID string, event workflow.ProgressEvent) bool
+	updateStepStatus = func(steps []StepResult, stepID string, event workflow.ProgressEvent) bool {
+		for i := range steps {
+			// 先检查当前节点是否匹配（父节点优先）
+			if steps[i].ID == stepID || steps[i].Name == event.Name {
+				if event.Type == "step_start" {
+					steps[i].Status = "running"
+					steps[i].StartTime = event.Time
+				} else if event.Type == "step_complete" {
+					steps[i].Status = event.Status
+					steps[i].EndTime = event.Time
+					steps[i].Duration = event.Duration
+				} else if event.Type == "step_output" {
+					// 累加输出到 step 的 Output 字段
+					if event.Output != "" {
+						if steps[i].Output != "" {
+							steps[i].Output += "\n" + event.Output
+						} else {
+							steps[i].Output = event.Output
+						}
+					}
+				}
+				return true
+			}
+			// 然后检查子节点
+			if len(steps[i].Children) > 0 {
+				if updateStepStatus(steps[i].Children, stepID, event) {
+					// Update parent status based on children
+					allDone := true
+					allSuccess := true
+					for _, child := range steps[i].Children {
+						if child.Status != "success" && child.Status != "failed" && child.Status != "skipped" {
+							allDone = false
+						}
+						if child.Status != "success" {
+							allSuccess = false
+						}
+					}
+					if allDone {
+						if allSuccess {
+							steps[i].Status = "success"
+						} else {
+							steps[i].Status = "failed"
+						}
+					}
+					return true
+				}
+				// For foreach/loop, dynamically add new child for iterations
+				// Replace template child with first actual iteration
+				if steps[i].Action == "foreach" || steps[i].Action == "loop" {
+					if event.Type == "step_start" {
+						// Check if template child exists and should be replaced
+						hasTemplate := len(steps[i].Children) == 1 && 
+							strings.HasSuffix(steps[i].Children[0].ID, "-template")
+						
+						newChild := StepResult{
+							ID:        stepID,
+							Name:      event.Name,
+							Action:    event.Action,
+							Status:    "running",
+							StartTime: event.Time,
+						}
+						
+						if hasTemplate {
+							// Replace template with first iteration
+							steps[i].Children = []StepResult{newChild}
+						} else {
+							// Append subsequent iterations
+							steps[i].Children = append(steps[i].Children, newChild)
+						}
+						steps[i].Status = "running"
+						return true
+					}
+				}
+				// For parallel: check if this event matches one of its pre-defined children
+				if steps[i].Action == "parallel" && len(steps[i].Children) > 0 {
+					// Update parent status when any child starts/completes
+					if event.Type == "step_start" {
+						steps[i].Status = "running"
+					}
+				}
+			}
+			// Condition branch children (then_children / else_children)
+			if steps[i].Action == "condition" {
+				if len(steps[i].ThenChildren) > 0 {
+					if updateStepStatus(steps[i].ThenChildren, stepID, event) {
+						steps[i].Status = "running"
+					}
+				}
+				if len(steps[i].ElseChildren) > 0 {
+					if updateStepStatus(steps[i].ElseChildren, stepID, event) {
+						steps[i].Status = "running"
+					}
+				}
+			}
+		}
+		return false
+	}
+	
+	var buildSteps func(steps []workflow.Step, parentId string) []StepResult
+	buildSteps = func(steps []workflow.Step, parentId string) []StepResult {
+		result := make([]StepResult, 0, len(steps))
+		for i, s := range steps {
+			// Generate ID if not present
+			stepID := s.ID
+			if stepID == "" {
+				if s.Name != "" {
+					stepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(s.Name, " ", "-")))
+				} else {
+					stepID = fmt.Sprintf("%s-child-%d", parentId, i)
+				}
+			}
+			
+			step := StepResult{
+				ID:          stepID,
+				Name:        s.Name,
+				Description: s.Description,
+				Action:      s.Action,
+				Status:      "pending",
+				Next:        s.Next,
+				DependsOn:   s.DependsOn,
+				JoinMode:    s.JoinMode,
+				Expression:  s.Expression, // condition expression
+				// Sleep
+				SleepDuration: s.Duration,
+				// Shell
+				ShellCommand: s.Command,
+				// HTTP
+				HTTPUrl:    s.URL,
+				HTTPMethod: s.Method,
+				// Log
+				LogMessage: s.Message,
+			}
+			// Recursively build children for parallel (uses Steps)
+			childSteps := s.Steps
+			if len(childSteps) > 0 {
+				step.Children = buildSteps(childSteps, stepID)
+			}
+			// For foreach/loop, pre-build template child from Do (to show structure before execution)
+			if (s.Action == "foreach" || s.Action == "loop") && len(s.Do) > 0 {
+				// Build one template child to show the loop body structure
+				templateChild := buildSteps(s.Do, stepID+"-template")
+				if len(templateChild) > 0 {
+					templateChild[0].ID = stepID + "-template"
+					templateChild[0].Name = "__pending_loop__" // Special marker for frontend translation
+					templateChild[0].Status = "pending"
+					step.Children = templateChild
+				}
+			}
+			// For condition: build then_children and else_children separately
+			if s.Action == "condition" {
+				if len(s.Then) > 0 {
+					step.ThenChildren = buildSteps(s.Then, stepID+"-then")
+				}
+				if len(s.Else) > 0 {
+					step.ElseChildren = buildSteps(s.Else, stepID+"-else")
+				}
+			}
+			result = append(result, step)
+		}
+		return result
+	}
+	
+	steps := buildSteps(wf.Steps, "")
+	
+	exec := &ExecutionDetail{
+		ExecutionRecord: ExecutionRecord{
+			ID:           executionID,
+			WorkflowName: wf.Name,
+			WorkflowFile: strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml"),
+			Status:       "running",
+			StartTime:    time.Now().Format(time.RFC3339),
+			StepsCount:   len(wf.Steps),
+		},
+		Logs:     []LogEntry{},
+		Steps:    steps,
+		Workflow: wf.Name,
+	}
+
+	h.execMu.Lock()
+	h.executions[executionID] = exec
+	h.execMu.Unlock()
+
+	// Create executor
+	executor := workflow.NewExecutor(vars)
+	executor.SetDryRun(req.DryRun)
+
+	// Setup progress callback
+	executor.OnProgress = func(event workflow.ProgressEvent) {
+		// Generate StepID if not present (matches buildSteps logic)
+		stepID := event.StepId
+		if stepID == "" && event.Name != "" {
+			stepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(event.Name, " ", "-")))
+		}
+
+		// 格式化日志消息
+		var logMessage string
+		var logLevel string
+		switch event.Type {
+		case "workflow_start":
+			logMessage = fmt.Sprintf("🚀 Starting workflow: %s", wf.Name)
+			logLevel = "INFO"
+		case "workflow_end":
+			if event.Status == "success" {
+				logMessage = fmt.Sprintf("✅ Workflow completed successfully")
+				logLevel = "INFO"
+			} else {
+				logMessage = fmt.Sprintf("❌ Workflow failed: %s", event.Error)
+				logLevel = "ERROR"
+			}
+		case "step_start":
+			logMessage = fmt.Sprintf("▶ Starting: %s", event.Name)
+			logLevel = "INFO"
+		case "step_complete":
+			if event.Status == "failed" {
+				logMessage = fmt.Sprintf("✗ Failed: %s", event.Name)
+				if event.Error != "" {
+					logMessage += fmt.Sprintf(" - %s", event.Error)
+				}
+				logLevel = "ERROR"
+			} else {
+				logMessage = fmt.Sprintf("✓ Completed: %s", event.Name)
+				if event.Duration != "" {
+					logMessage += fmt.Sprintf(" (%s)", event.Duration)
+				}
+				logLevel = "INFO"
+			}
+		case "step_output":
+			logMessage = event.Output
+			logLevel = "INFO"
+		}
+
+		// Broadcast to WebSocket clients (包含日志消息)
+		h.hub.Broadcast(WSProgressEvent{
+			Type:            event.Type,
+			ExecutionID:     executionID,
+			WorkflowName:    wf.Name,
+			WorkflowFile:    strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml"),
+			StepID:          stepID,
+			StepName:        event.Name,
+			Action:          event.Action,
+			Status:          event.Status,
+			Output:          event.Output,
+			Error:           event.Error,
+			Duration:        event.Duration,
+			Timestamp:       event.Time,
+			LogMessage:      logMessage,
+			LogLevel:        logLevel,
+			ConditionResult: event.ConditionResult,
+		})
+
+		// Store logs and update step status in real-time
+		h.execMu.Lock()
+		defer h.execMu.Unlock()
+		if e, ok := h.executions[executionID]; ok {
+			// Log meaningful events with messages
+			switch event.Type {
+			case "step_start":
+				e.Logs = append(e.Logs, LogEntry{
+					Timestamp: event.Time,
+					Level:     "info",
+					Message:   fmt.Sprintf("▶ Starting: %s", event.Name),
+					Step:      event.Name,
+					StepID:    event.StepId,
+				})
+			case "step_complete":
+				msg := fmt.Sprintf("✓ Completed: %s", event.Name)
+				if event.Duration != "" {
+					msg += fmt.Sprintf(" (%s)", event.Duration)
+				}
+				if event.Status == "failed" {
+					msg = fmt.Sprintf("✗ Failed: %s", event.Name)
+					if event.Error != "" {
+						msg += fmt.Sprintf(" - %s", event.Error)
+					}
+				}
+				var logLevel string
+				if event.Status == "failed" {
+					logLevel = "error"
+				} else {
+					logLevel = "info"
+				}
+				e.Logs = append(e.Logs, LogEntry{
+					Timestamp: event.Time,
+					Level:     logLevel,
+					Message:   msg,
+					Step:      event.Name,
+					StepID:    event.StepId,
+				})
+			case "step_output":
+				if event.Output != "" {
+					e.Logs = append(e.Logs, LogEntry{
+						Timestamp: event.Time,
+						Level:     "info",
+						Message:   event.Output,
+						Step:      event.Name,
+						StepID:    event.StepId,
+					})
+				}
+			case "workflow_end":
+				var msg string
+				var logLevel string
+				if event.Status == "success" {
+					msg = "✅ Workflow completed successfully"
+					logLevel = "info"
+				} else {
+					msg = fmt.Sprintf("❌ Workflow failed: %s", event.Error)
+					logLevel = "error"
+				}
+				e.Logs = append(e.Logs, LogEntry{
+					Timestamp: event.Time,
+					Level:     logLevel,
+					Message:   msg,
+				})
+				e.Status = event.Status
+			case "workflow_start":
+				e.Logs = append(e.Logs, LogEntry{
+					Timestamp: event.Time,
+					Level:     "info",
+					Message:   fmt.Sprintf("🚀 Starting workflow: %s", wf.Name),
+				})
+			}
+
+			// Update step status in real-time
+			updateStepStatus(e.Steps, stepID, event)
+		}
+	}
+
+	// Execute in goroutine
+	go func() {
+		result := executor.Execute(wf)
+
+		h.execMu.Lock()
+		defer h.execMu.Unlock()
+		if e, ok := h.executions[executionID]; ok {
+			e.Status = result.Status
+			e.EndTime = result.EndTime
+			e.Error = result.Error
+
+			// Convert workflow.StepResult to api.StepResult
+			var convertSteps func([]workflow.StepResult) []StepResult
+			convertSteps = func(steps []workflow.StepResult) []StepResult {
+				result := make([]StepResult, len(steps))
+				for i, s := range steps {
+					fmt.Fprintf(os.Stderr, "DEBUG convertSteps: s.Name=%s, s.Action=%s, len(s.Children)=%d\n", 
+						s.Name, s.Action, len(s.Children))
+					for j, child := range s.Children {
+						fmt.Fprintf(os.Stderr, "  s.Child[%d]: name=%s, action=%s\n", j, child.Name, child.Action)
+					}
+					result[i] = StepResult{
+						ID:              s.ID,
+						Name:            s.Name,
+						Description:     s.Description,
+						Action:          s.Action,
+						Status:          s.Status,
+						StartTime:       s.StartTime,
+						EndTime:         s.EndTime,
+						Output:          s.Output,
+						Error:           s.Error,
+						Duration:        s.Duration,
+						Children:        convertSteps(s.Children),
+						Next:            s.Next,
+						DependsOn:       s.DependsOn,
+						JoinMode:        s.JoinMode,
+						Expression:      s.Expression,
+						ConditionResult: s.ConditionResult,
+						ThenChildren:    convertSteps(s.ThenChildren),
+						ElseChildren:    convertSteps(s.ElseChildren),
+						SleepDuration:   s.SleepDuration,
+						ShellCommand:    s.ShellCommand,
+						HTTPUrl:         s.HTTPUrl,
+						HTTPMethod:      s.HTTPMethod,
+						LogMessage:      s.LogMessage,
+					}
+				}
+				return result
+			}
+			
+			apiSteps := convertSteps(result.Steps)
+
+			// Update steps with results (preserve action from pre-populated steps)
+			var updateStep func(existing *StepResult, result StepResult, wfSteps []workflow.Step)
+			updateStep = func(ex *StepResult, sr StepResult, wfSteps []workflow.Step) {
+				// Debug logging
+				fmt.Fprintf(os.Stderr, "DEBUG updateStep: ex.Name=%s, ex.Action=%s, sr.Name=%s, sr.Action=%s, sr.Children.len=%d\n", 
+					ex.Name, ex.Action, sr.Name, sr.Action, len(sr.Children))
+				for i, child := range sr.Children {
+					fmt.Fprintf(os.Stderr, "  sr.Child[%d]: name=%s, action=%s\n", i, child.Name, child.Action)
+				}
+				
+				// Store original ID for lookup before overwriting
+				lookupKey := ex.ID
+				if lookupKey == "" {
+					lookupKey = ex.Name
+				}
+
+				if sr.ID != "" {
+					ex.ID = sr.ID  // Update ID (important for foreach iterations)
+				}
+				ex.Status = sr.Status
+				ex.StartTime = sr.StartTime
+				ex.EndTime = sr.EndTime
+				ex.Output = sr.Output
+				ex.Error = sr.Error
+				ex.Duration = sr.Duration
+				ex.Description = sr.Description
+				// Preserve DAG fields if present
+				if len(sr.Next) > 0 {
+					ex.Next = sr.Next
+				}
+				if len(sr.DependsOn) > 0 {
+					ex.DependsOn = sr.DependsOn
+				}
+				if sr.JoinMode != "" {
+					ex.JoinMode = sr.JoinMode
+				}
+				// Condition fields
+				if sr.Expression != "" {
+					ex.Expression = sr.Expression
+				}
+				ex.ConditionResult = sr.ConditionResult
+				// For foreach/parallel/loop: replace children, but filter to only include steps defined in the original Do/Steps block
+				if ex.Action == "foreach" || ex.Action == "loop" || ex.Action == "parallel" {
+					// Find definition linearly in wfSteps (top-level)
+					var def *workflow.Step
+					for i := range wfSteps {
+						s := &wfSteps[i]
+						sID := s.ID
+						if sID == "" && s.Name != "" {
+							sID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(s.Name, " ", "-")))
+						}
+						if sID == lookupKey || s.Name == lookupKey {
+							def = s
+							break
+						}
+					}
+					allowedNames := make(map[string]bool)
+					if def != nil {
+						if def.Action == "foreach" || def.Action == "loop" {
+							for _, doStep := range def.Do {
+								allowedNames[doStep.Name] = true
+							}
+						} else if def.Action == "parallel" {
+							for _, pStep := range def.Steps {
+								allowedNames[pStep.Name] = true
+							}
+						}
+					}
+					
+					if len(allowedNames) > 0 {
+						filteredChildren := make([]StepResult, 0, len(sr.Children))
+						for _, child := range sr.Children {
+							if allowedNames[child.Name] {
+								filteredChildren = append(filteredChildren, child)
+							}
+						}
+						ex.Children = filteredChildren
+					} else {
+						ex.Children = sr.Children
+					}
+				} else if ex.Action == "condition" {
+					// For condition: update ThenChildren and ElseChildren
+					// Clear Children (condition uses then_children and else_children)
+					fmt.Fprintf(os.Stderr, "DEBUG updateStep Condition: ex.Name=%s, sr.ThenChildren.len=%d, sr.ElseChildren.len=%d\n",
+						ex.Name, len(sr.ThenChildren), len(sr.ElseChildren))
+					ex.Children = nil
+					if sr.ThenChildren != nil {
+						fmt.Fprintf(os.Stderr, "  Setting ex.ThenChildren with %d items\n", len(sr.ThenChildren))
+						ex.ThenChildren = sr.ThenChildren
+					}
+					if sr.ElseChildren != nil {
+						fmt.Fprintf(os.Stderr, "  Setting ex.ElseChildren with %d items\n", len(sr.ElseChildren))
+						ex.ElseChildren = sr.ElseChildren
+					}
+				} else {
+					// Recursively update children
+					for i := range sr.Children {
+						if i < len(ex.Children) {
+							updateStep(&ex.Children[i], sr.Children[i], wfSteps)
+						} else {
+							ex.Children = append(ex.Children, sr.Children[i])
+						}
+					}
+				}
+			}
+			
+			// Build a map of all results for quick lookup
+			resultMap := make(map[string]StepResult)
+			var buildResultMap func(steps []StepResult)
+			buildResultMap = func(steps []StepResult) {
+				for _, sr := range steps {
+					key := sr.ID
+					if key == "" {
+						key = sr.Name
+					}
+					if key != "" {
+						resultMap[key] = sr
+					}
+					// Also include children in the map
+					if len(sr.Children) > 0 {
+						buildResultMap(sr.Children)
+					}
+					// Include condition children
+					if len(sr.ThenChildren) > 0 {
+						buildResultMap(sr.ThenChildren)
+					}
+					if len(sr.ElseChildren) > 0 {
+						buildResultMap(sr.ElseChildren)
+					}
+				}
+			}
+			buildResultMap(apiSteps)
+			
+			// Now recursively update existing tree using the result map
+			var updateTree func(existing []StepResult, wfSteps []workflow.Step)
+			updateTree = func(existing []StepResult, wfSteps []workflow.Step) {
+				for i := range existing {
+					ex := &existing[i]
+					key := ex.ID
+					if key == "" {
+						key = ex.Name
+					}
+					if key != "" {
+						if sr, ok := resultMap[key]; ok {
+							fmt.Fprintf(os.Stderr, "DEBUG updateTree: MATCH ex.Name=%s to sr.Name=%s\n", ex.Name, sr.Name)
+							updateStep(ex, sr, wfSteps)
+							// Remove from map to avoid processing again
+							delete(resultMap, key)
+						} else if ex.Name != "" {
+							// Also try to match by name (for container nodes without ID in results)
+							if sr, ok := resultMap[ex.Name]; ok {
+								fmt.Fprintf(os.Stderr, "DEBUG updateTree: MATCH by NAME ex.Name=%s to sr.Name=%s\n", ex.Name, sr.Name)
+								updateStep(ex, sr, wfSteps)
+								delete(resultMap, ex.Name)
+							}
+						}
+					} else if ex.Name != "" {
+						// Try to match by name if ID is empty
+						if sr, ok := resultMap[ex.Name]; ok {
+							fmt.Fprintf(os.Stderr, "DEBUG updateTree: MATCH ex.Name=%s (no ID) to sr.Name=%s\n", ex.Name, sr.Name)
+							updateStep(ex, sr, wfSteps)
+							delete(resultMap, ex.Name)
+						}
+					}
+					// Recursively update children
+					if len(existing[i].Children) > 0 {
+						updateTree(existing[i].Children, wfSteps)
+					}
+					// Update condition children
+					if len(existing[i].ThenChildren) > 0 {
+						updateTree(existing[i].ThenChildren, wfSteps)
+					}
+					if len(existing[i].ElseChildren) > 0 {
+						updateTree(existing[i].ElseChildren, wfSteps)
+					}
+				}
+			}
+			
+			updateTree(e.Steps, wf.Steps)
+
+			// Calculate duration
+			if start, err := time.Parse(time.RFC3339, e.StartTime); err == nil {
+				if end, err := time.Parse(time.RFC3339, e.EndTime); err == nil {
+					e.Duration = end.Sub(start).String()
+				}
+			}
+		}
+
+		// Send final event
+		h.hub.Broadcast(WSProgressEvent{
+			Type:         "workflow_end",
+			ExecutionID:  executionID,
+			WorkflowName: wf.Name,
+			WorkflowFile: strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml"),
+			Status:       result.Status,
+			Error:        result.Error,
+			Timestamp:    result.EndTime,
+		})
+	}()
+
+	writeJSON(w, http.StatusOK, success(map[string]string{
+		"executionId": executionID,
+		"status":      "started",
+	}))
+}
+
+// GetExecutions returns execution history
+func (h *Handler) GetExecutions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	h.execMu.RLock()
+	defer h.execMu.RUnlock()
+
+	var executions []ExecutionRecord
+	for _, e := range h.executions {
+		executions = append(executions, e.ExecutionRecord)
+	}
+
+	// Sort by start time (newest first)
+	for i := 0; i < len(executions)-1; i++ {
+		for j := i + 1; j < len(executions); j++ {
+			if executions[i].StartTime < executions[j].StartTime {
+				executions[i], executions[j] = executions[j], executions[i]
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, success(executions))
+}
+
+// GetExecution returns execution details
+func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Execution ID required"))
+		return
+	}
+
+	h.execMu.RLock()
+	defer h.execMu.RUnlock()
+
+	exec, ok := h.executions[id]
+	if !ok {
+		writeJSON(w, http.StatusNotFound, errorResp("Execution not found"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, success(exec))
+}
+
+// WSHandler handles WebSocket connections
+func (h *Handler) WSHandler(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+
+	client := &WSClient{
+		hub:  h.hub,
+		conn: conn,
+		send: make(chan WSProgressEvent, 512), // Increased buffer for long-running workflows
+		sub:  make(map[string]bool),
+	}
+
+	client.hub.register <- client
+
+	go client.WritePump()
+	go client.ReadPump()
+}
