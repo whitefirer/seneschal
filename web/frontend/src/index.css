@@ -1,0 +1,192 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 48%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-muted;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/30 rounded;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/50;
+}
+
+/* React Flow styles */
+.react-flow__node {
+  @apply rounded-lg shadow-md border-border text-card-foreground;
+  /* 确保节点在连线之上，防止连线穿过节点 */
+  z-index: 10;
+}
+
+.react-flow__edge {
+  z-index: 1;
+}
+
+.react-flow__edge-path {
+  @apply stroke-muted-foreground/50;
+}
+
+.react-flow__controls {
+  @apply shadow-lg border border-border;
+}
+
+.react-flow__controls-button {
+  @apply bg-card border-border hover:bg-accent;
+}
+
+/* Hollow edge styles - 中空边 */
+.hollow-edge-outer {
+  stroke: #ec4899 !important;
+}
+
+.hollow-edge-inner {
+  stroke: #f9fafb !important;
+}
+
+.dark .hollow-edge-inner {
+  stroke: #1f2937 !important;
+}
+
+/* MiniMap transparency */
+.react-flow__minimap {
+  background: rgba(255, 255, 255, 0.5) !important;
+  backdrop-filter: blur(4px);
+}
+
+.dark .react-flow__minimap {
+  background: rgba(30, 41, 59, 0.5) !important;
+}
+
+/* ANSI output styles - 终端颜色 */
+.ansi-output {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.ansi-output span {
+  font-family: inherit;
+}
+
+/* 确保日志行正确换行 */
+.ansi-output br {
+  display: block;
+  content: "";
+  margin-top: 0.25rem;
+}
+
+/* Range slider thumb color - 默认低调灰色，hover时蓝色 */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+/* Hover时变大变蓝 */
+input[type="range"]:hover::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+}
+
+input[type="range"]:hover::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #3b82f6;
+}
+
+/* Dark mode slider thumb */
+.dark input[type="range"]::-webkit-slider-thumb {
+  background: #6b7280;
+}
+
+.dark input[type="range"]::-moz-range-thumb {
+  background: #6b7280;
+}
+
+/* Dark mode hover */
+.dark input[type="range"]:hover::-webkit-slider-thumb {
+  background: #3b82f6;
+}
+
+.dark input[type="range"]:hover::-moz-range-thumb {
+  background: #3b82f6;
+}
