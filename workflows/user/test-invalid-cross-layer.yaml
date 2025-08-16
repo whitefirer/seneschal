@@ -1,0 +1,21 @@
+name: test-invalid-deps
+version: v1.0
+description: 测试跨层依赖验证
+
+steps:
+  - name: start
+    action: log
+    message: Starting
+
+  - name: container
+    action: parallel
+    steps:
+      - name: child-1
+        action: log
+        message: Child 1
+        depends_on:
+          - start  # ❌ 跨层依赖：子节点依赖外部节点
+
+  - name: end
+    action: log
+    message: Done

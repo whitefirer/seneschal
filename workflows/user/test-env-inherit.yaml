@@ -1,0 +1,34 @@
+name: Test Env Inheritance
+version: "1.0"
+steps:
+  # Test that system env vars are inherited
+  - name: check-home
+    action: shell
+    command: |
+      echo "HOME=$HOME"
+      echo "USER=${USER:-unknown}"
+      echo "PATH=$PATH"
+    output_vars:
+      - HOME
+      - USER
+      - PATH
+
+  - name: use-home
+    action: log
+    message: "Home: {{.HOME}}, User: {{.USER}}"
+
+  # Test output_vars alongside inherited env
+  - name: detect-project
+    action: shell
+    command: |
+      if [ -f "$(pwd)/go.mod" ]; then
+        echo "PROJECT_ROOT=$(pwd)"
+      else
+        echo "PROJECT_ROOT=none"
+      fi
+    output_vars:
+      - PROJECT_ROOT
+
+  - name: use-project
+    action: log
+    message: "Project: {{.PROJECT_ROOT}}"

@@ -1,0 +1,26 @@
+name: test-invalid-cross-branch
+version: v1.0
+description: 测试跨分支依赖验证
+
+steps:
+  - name: start
+    action: log
+    message: Starting
+
+  - name: check-status
+    action: condition
+    expression: status == "success"
+    then:
+      - name: then-step
+        action: log
+        message: Then branch
+
+  - name: else-branch
+    action: log
+    message: Else branch
+    depends_on:
+      - then-step  # ❌ 跨分支依赖：else 依赖 then
+
+  - name: end
+    action: log
+    message: Done

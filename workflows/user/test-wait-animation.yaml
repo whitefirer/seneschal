@@ -1,0 +1,29 @@
+name: test-wait-animation
+version: "1.0"
+description: 测试连线流动动画
+
+steps:
+  - name: start
+    action: log
+    message: "开始执行"
+    level: info
+
+  - name: wait1
+    action: sleep
+    duration: "10s"
+    description: 等待 10 秒
+
+  - name: shell1
+    action: shell
+    command: echo "Hello World"
+    description: 执行命令
+
+  - name: wait2
+    action: sleep
+    duration: "5s"
+    description: 等待 5 秒
+
+  - name: finish
+    action: log
+    message: "执行完成"
+    level: info

@@ -1,0 +1,26 @@
+name: Dag
+version: 1
+description: Dag测试
+steps:
+  - name: step-1
+    action: shell
+    description: 第一个节点，无依赖
+    shell: echo "初始化完成"
+    next: [step-2a, step-2b]
+  - name: step-2a
+    action: shell
+    description: 第一个分支任务
+    shell: sleep 1 && echo "任务A完成"
+    next: [step-3]
+    depends_on: [step-1]
+  - name: step-2b
+    action: shell
+    description: 第二个分支任务
+    shell: sleep 2 && echo "任务B完成"
+    next: [step-3]
+    depends_on: [step-1]
+  - name: step-3
+    action: shell
+    description: 等待所有依赖完成后执行
+    shell: echo "所有任务汇合完成"
+    depends_on: [step-2b, step-2a]

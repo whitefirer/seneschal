@@ -1,0 +1,34 @@
+name: test-dag-fix
+version: "1.0"
+description: Test DAG with depends_on fix
+steps:
+  - name: step-1
+    action: shell
+    next: [step-2b, step-2a]
+    description: 第一个节点，无依赖
+    shell: echo "初始化完成"
+  - name: step-2a
+    action: shell
+    next: [step-3]
+    depends_on: [step-1]
+    description: 第一个分支任务
+    shell: sleep 1 && echo "任务 A 完成"
+  - name: step-3
+    action: shell
+    next: [node-bgkicb]
+    depends_on: [step-2a, step-2b]
+    description: 等待所有依赖完成后执行
+    shell: echo "所有任务汇合完成"
+  - name: node-bgkicb
+    action: foreach
+    next: [step-10]
+    depends_on: [step-3]
+  - name: step-10
+    action: log
+    depends_on: [node-bgkicb]
+  - name: step-2b
+    action: shell
+    next: [step-3]
+    depends_on: [step-1]
+    description: 第二个分支任务
+    shell: sleep 2 && echo "任务 B 完成"

@@ -1,0 +1,42 @@
+name: Test Output Vars
+version: "1.0"
+steps:
+  # Test 1: Single variable (backward compatible)
+  - name: test-single
+    action: shell
+    command: |
+      echo "single-value"
+    output_var: single_var
+
+  - name: check-single
+    action: log
+    message: "Single var: {{.single_var}}"
+
+  # Test 2: Multiple variables (KEY=VALUE format)
+  - name: test-multi
+    action: shell
+    command: |
+      echo "NAME=Alice"
+      echo "AGE=30"
+      echo "CITY=Beijing"
+      echo "This line is ignored"
+    output_vars:
+      - NAME
+      - AGE
+      - CITY
+
+  - name: check-multi
+    action: log
+    message: "Name: {{.NAME}}, Age: {{.AGE}}, City: {{.CITY}}"
+
+  # Test 3: Override existing variables
+  - name: test-override
+    action: shell
+    command: |
+      echo "VERSION=2.0.0"
+    output_vars:
+      - VERSION
+
+  - name: check-override
+    action: log
+    message: "Version overridden to: {{.VERSION}}"

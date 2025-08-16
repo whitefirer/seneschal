@@ -1,0 +1,36 @@
+name: Test Parallel Workflow
+description: 测试并行任务的可视化效果
+
+steps:
+  - id: step-1
+    name: 初始化任务
+    description: 第一个初始化步骤
+    action: shell
+    command: echo "初始化完成"
+
+  - id: parallel-tasks
+    name: 并行处理
+    description: 同时执行多个任务
+    action: parallel
+    steps:
+      - id: task-1
+        name: 任务A
+        description: 第一个并行任务
+        action: shell
+        command: sleep 1 && echo "任务A完成"
+      - id: task-2
+        name: 任务B
+        description: 第二个并行任务
+        action: shell
+        command: sleep 2 && echo "任务B完成"
+      - id: task-3
+        name: 任务C
+        description: 第三个并行任务
+        action: shell
+        command: sleep 1 && echo "任务C完成"
+
+  - id: step-3
+    name: 收尾任务
+    description: 最后的收尾步骤
+    action: shell
+    command: echo "所有任务完成"

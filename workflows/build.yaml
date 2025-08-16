@@ -1,0 +1,152 @@
+name: Build goworkflow
+version: "1.0"
+description: "Auto-build project using goworkflow"
+
+# Avoid "./" - use {{.PROJECT_ROOT}} with absolute paths for portability
+# $HOME is now inherited from system environment automatically
+variables:
+  go_path: "/usr/local/go/bin"
+
+steps:
+  # Step 1: Detect environment and set multiple variables
+  - name: detect-env
+    action: shell
+    command: |
+      set -e
+      
+      # Find project root by searching for go.mod
+      SEARCH_DIR="$(pwd)"
+      while [ "$SEARCH_DIR" != "/" ]; do
+        if [ -f "$SEARCH_DIR/go.mod" ]; then
+          PROJECT_ROOT="$(cd "$SEARCH_DIR" && pwd)"
+          break
+        fi
+        SEARCH_DIR="$(dirname "$SEARCH_DIR")"
+      done
+      
+      if [ -z "$PROJECT_ROOT" ]; then
+        echo "PROJECT_ROOT=ERROR"
+        echo "DETECTION_FAILED=true"
+        exit 1
+      fi
+      
+      # Output variables in KEY=VALUE format
+      echo "PROJECT_ROOT=$PROJECT_ROOT"
+      echo "HOME_DIR=$HOME"
+      echo "DETECTION_FAILED=false"
+    output_vars:
+      - PROJECT_ROOT
+      - HOME_DIR
+      - DETECTION_FAILED
+
+  # Step 2: Verify environment detection
+  - name: verify-env
+    action: shell
+    command: |
+      set -e
+      echo "Project root: {{.PROJECT_ROOT}}"
+      echo "Home: {{.HOME_DIR}}"
+      echo "Go path: {{.go_path}}"
+      
+      if [ "{{.DETECTION_FAILED}}" = "true" ] || [ -z "{{.PROJECT_ROOT}}" ]; then
+        echo "❌ Environment detection failed"
+        exit 1
+      fi
+      echo "Environment detected ✅"
+
+  # Step 3: Clean frontend build artifacts
+  - name: clean-frontend
+    action: shell
+    command: |
+      set -e
+      cd "{{.PROJECT_ROOT}}"
+      rm -rf web/static/*
+      echo "Cleaned frontend build directory ✅"
+
+  # Step 4: Build frontend (React + Vite)
+  - name: build-frontend
+    action: shell
+    command: |
+      set -e
+      cd "{{.PROJECT_ROOT}}/web/frontend"
+      
+      # Add node_modules/.bin to PATH for tsc/vite
+      export PATH="./node_modules/.bin:$PATH"
+      
+      npm run build
+      echo "Frontend build complete ✅"
+
+  # Step 5: Build CLI binary
+  - name: build-cli
+    action: shell
+    command: |
+      set -e
+      cd "{{.PROJECT_ROOT}}"
+      
+      export PATH="{{.go_path}}:$PATH"
+      export GOPATH="$HOME/go"
+      export GOMODCACHE="$HOME/go/pkg/mod"
+      export GOCACHE="$HOME/.cache/go-build"
+      
+      go build -o goworkflow ./cmd/cli/
+      echo "CLI binary built: $(ls -lh goworkflow | awk '{print $5}') ✅"
+
+  # Step 6: Build Web Server binary
+  - name: build-server
+    action: shell
+    command: |
+      set -e
+      cd "{{.PROJECT_ROOT}}"
+      
+      export PATH="{{.go_path}}:$PATH"
+      export GOPATH="$HOME/go"
+      export GOMODCACHE="$HOME/go/pkg/mod"
+      export GOCACHE="$HOME/.cache/go-build"
+      
+      go build -o goworkflow-server ./cmd/server/
+      echo "Server binary built: $(ls -lh goworkflow-server | awk '{print $5}') ✅"
+
+  # Step 7: Verify CLI
+  - name: verify-cli
+    action: shell
+    command: |
+      set -e
+      cd "{{.PROJECT_ROOT}}"
+      
+      if [ -f "goworkflow" ] && [ -x "goworkflow" ]; then
+        echo "✅ CLI binary exists and is executable"
+        ./goworkflow --help 2>&1 | head -3
+      else
+        echo "❌ CLI binary not found or not executable"
+        exit 1
+      fi
+
+  # Step 8: Verify Server
+  - name: verify-server
+    action: shell
+    command: |
+      set -e
+      cd "{{.PROJECT_ROOT}}"
+      
+      if [ -f "goworkflow-server" ] && [ -x "goworkflow-server" ]; then
+        echo "✅ Server binary exists and is executable"
+      else
+        echo "❌ Server binary not found or not executable"
+        exit 1
+      fi
+
+  # Step 9: Summary
+  - name: summary
+    action: shell
+    command: |
+      cd "{{.PROJECT_ROOT}}"
+      
+      echo "========================================="
+      echo "  Build Summary"
+      echo "========================================="
+      echo "Project: $(pwd)"
+      echo "CLI:     $(ls -lh goworkflow 2>/dev/null | awk '{print $5}' || echo 'not found')"
+      echo "Server:  $(ls -lh goworkflow-server 2>/dev/null | awk '{print $5}' || echo 'not found')"
+      echo "Static:  $(du -sh web/static 2>/dev/null | awk '{print $1}' || echo 'not found')"
+      echo "========================================="
+      echo "Build completed successfully! 🎉"

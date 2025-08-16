@@ -1,0 +1,24 @@
+name: test-foreach-simple
+version: v1.0
+description: 简单测试 Foreach 容器嵌套
+
+steps:
+  - name: start
+    action: log
+    message: Starting
+
+  - name: foreach-loop
+    action: foreach
+    items: ["item1", "item2", "item3"]
+    item_var: item
+    do:
+      - name: process-item
+        action: log
+        message: Processing ${item}
+      - name: save-result
+        action: shell
+        shell: echo "Saved ${item}"
+
+  - name: finish
+    action: log
+    message: Done

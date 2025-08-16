@@ -1,0 +1,30 @@
+name: Foreach Test
+version: "1.0"
+description: "测试 foreach 节点的展示"
+
+steps:
+  - name: step-1
+    description: "准备数据"
+    action: shell
+    command: echo "准备数据完成"
+
+  - name: process-items
+    description: "处理多个项目"
+    action: foreach
+    items:
+      - "alpha"
+      - "beta"
+      - "gamma"
+      - "delta"
+      - "last"
+    item_var: item
+    do:
+      - name: process-item
+        description: "处理 {{.item}}"
+        action: shell
+        command: sleep 1 & echo "Processing {{.item}}"
+
+  - name: step-3
+    description: "完成"
+    action: shell
+    command: echo "所有项目处理完成"

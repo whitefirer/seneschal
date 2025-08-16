@@ -1,0 +1,77 @@
+name: example-workflow
+version: "1.0"
+description: "A complete example demonstrating all workflow features"
+
+variables:
+  app_name: MyApp
+  env: dev
+  version: "1.0.0"
+
+steps:
+  - name: greet
+    action: log
+    message: "Deploying {{.app_name}} v{{.version}} to {{.env}}"
+    level: info
+
+  - name: check-env
+    action: shell
+    command: 'echo "Current directory: $(pwd)"'
+    description: "Show current directory"
+
+  - name: set-timestamp
+    action: set
+    value: "2026-04-03T04:34:00Z"
+
+  - name: fetch-data
+    action: http
+    url: "https://httpbin.org/get"
+    method: GET
+    timeout: "10s"
+    save_output: response
+
+  - name: check-response
+    action: condition
+    expression: "{{.env}} == prod"
+    then:
+      - name: deploy-prod
+        action: log
+        message: "Production deployment!"
+        level: warn
+    else:
+      - name: deploy-dev
+        action: log
+        message: "Development deployment"
+
+  - name: parallel-tasks
+    action: parallel
+    steps:
+      - name: task-a
+        action: shell
+        command: echo "Task A completed"
+      - name: task-b
+        action: shell
+        command: echo "Task B completed"
+      - name: task-c
+        action: shell
+        command: echo "Task C completed"
+
+  - name: wait
+    action: sleep
+    duration: "1s"
+
+  - name: iterate
+    action: foreach
+    items:
+      - "alpha"
+      - "beta"
+      - "gamma"
+    item_var: service
+    do:
+      - name: process
+        action: log
+        message: "Processing {{.service}}"
+
+  - name: complete
+    action: log
+    message: "Workflow finished!"
+    level: info
