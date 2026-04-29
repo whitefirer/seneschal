@@ -26,3 +26,17 @@ Thumbs.db
 
 # Test outputs
 test-output/
+
+# Local scripts and tools
+restart.sh
+goworkflow
+goworkflow-server
+
+# Generated dirs
+.claude/
+docs/
+reports/
+screenshots/
+.bak/
+bin/
+memory/
