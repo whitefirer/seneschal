@@ -2,6 +2,9 @@
 
 A lightweight YAML-driven workflow engine written in Go. Define workflows in YAML, run them from CLI, and change behavior simply by editing the YAML file.
 
+![Workflow Execution](images/night-workflow.png)
+![Dark Theme](images/dark-workflow.png)
+
 ## Features
 
 - **YAML-first**: Define complete workflows in YAML with variables, conditions, and nested steps
