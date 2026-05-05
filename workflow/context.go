@@ -5,14 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"text/template"
 	"time"
 )
 
 // Context holds the execution state of a workflow.
 type Context struct {
+	mu        sync.RWMutex
 	Variables map[string]string
-	Results   map[string]string // step output results
+	Results   map[string]string
 }
 
 // NewContext creates a new execution context with initial variables.
@@ -26,24 +28,53 @@ func NewContext(variables map[string]string) *Context {
 	}
 }
 
+// Lock locks the context for writing.
+func (c *Context) Lock()   { c.mu.Lock() }
+func (c *Context) Unlock() { c.mu.Unlock() }
+
+// RLock locks the context for reading.
+func (c *Context) RLock()   { c.mu.RLock() }
+func (c *Context) RUnlock() { c.mu.RUnlock() }
+
 // Set sets a variable in the context.
 func (c *Context) Set(key, value string) {
+	c.mu.Lock()
 	c.Variables[key] = value
+	c.mu.Unlock()
 }
 
 // Get retrieves a variable from the context.
 func (c *Context) Get(key string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.Variables[key]
 }
 
+// SetResult stores a step result.
+func (c *Context) SetResult(key, value string) {
+	c.mu.Lock()
+	c.Results[key] = value
+	c.mu.Unlock()
+}
+
+// Snapshot returns a copy of all variables (for safe iteration).
+func (c *Context) Snapshot() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	m := make(map[string]string, len(c.Variables))
+	for k, v := range c.Variables {
+		m[k] = v
+	}
+	return m
+}
+
 // ResolveTemplate substitutes variables in a template string.
-// Supports {{.var}} syntax.
 func (c *Context) ResolveTemplate(tmplStr string) (string, error) {
 	if tmplStr == "" {
 		return "", nil
 	}
 
-	// Build a data map from variables
+	c.mu.RLock()
 	data := make(map[string]string)
 	for k, v := range c.Variables {
 		data[k] = v
@@ -51,6 +82,7 @@ func (c *Context) ResolveTemplate(tmplStr string) (string, error) {
 	for k, v := range c.Results {
 		data[k] = v
 	}
+	c.mu.RUnlock()
 
 	tmpl, err := template.New("").Parse(tmplStr)
 	if err != nil {
@@ -67,7 +99,6 @@ func (c *Context) ResolveTemplate(tmplStr string) (string, error) {
 
 // ResolveTemplateFromFile reads a template file and substitutes variables.
 func (c *Context) ResolveTemplateFromFile(filePath string) (string, error) {
-	// Resolve path template first
 	filePath, err := c.ResolveTemplate(filePath)
 	if err != nil {
 		return "", err
@@ -83,14 +114,13 @@ func (c *Context) ResolveTemplateFromFile(filePath string) (string, error) {
 
 // MergeEnv merges step-level env with context variables, resolving templates.
 func (c *Context) MergeEnv(stepEnv map[string]string) (map[string]string, error) {
-	env := make(map[string]string)
-
-	// First add context variables
+	c.mu.RLock()
+	env := make(map[string]string, len(c.Variables))
 	for k, v := range c.Variables {
 		env[k] = v
 	}
+	c.mu.RUnlock()
 
-	// Then override with step env (after resolving templates)
 	for k, v := range stepEnv {
 		resolved, err := c.ResolveTemplate(v)
 		if err != nil {

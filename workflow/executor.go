@@ -593,9 +593,9 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 	// 逐个迭代执行
 	for i, item := range items {
 		// 设置迭代变量
-		e.context.Variables[itemVar] = item
-		e.context.Variables[itemVar+"_index"] = fmt.Sprintf("%d", i)
-		e.context.Variables[itemVar+"_value"] = item
+		e.context.Set(itemVar, item)
+		e.context.Set(itemVar+"_index", fmt.Sprintf("%d", i))
+		e.context.Set(itemVar+"_value", item)
 		
 		// 为每次迭代创建子 DAG
 		graph, err := e.buildDAGGraph(container.Do)
@@ -774,7 +774,7 @@ func (e *Executor) parseItems(items interface{}) ([]string, error) {
 			}
 		} else {
 			// 变量名：从上下文中获取
-			if val, ok := e.context.Variables[v]; ok {
+			if val := e.context.Get(v); val != "" {
 				// 如果值包含逗号，分割
 				if strings.Contains(val, ",") {
 					parts := strings.Split(val, ",")
@@ -1268,7 +1268,7 @@ func (e *Executor) execShell(step Step) (string, error) {
 		return output, fmt.Errorf("command failed (exit %v, %s): %s", err, duration.Truncate(time.Millisecond), stderr.String())
 	}
 
-	e.context.Results[step.Name] = output
+	e.context.SetResult(step.Name, output)
 
 	// Save output to variable if specified (HTTP action compatibility)
 	if step.SaveOutput != "" {
@@ -1403,7 +1403,7 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 		e.printer.PrintHTTPCall(method, url, resp.StatusCode, duration.Truncate(time.Millisecond))
 	}
 
-	e.context.Results[step.Name] = output
+	e.context.SetResult(step.Name, output)
 
 	// Save output to variable if specified
 	if step.SaveOutput != "" {
@@ -1787,7 +1787,7 @@ func (e *Executor) execTemplate(step Step) (string, error) {
 	
 	// Note: step_output is sent by executeStep() to avoid duplication
 
-	e.context.Results[step.Name] = fmt.Sprintf("wrote %d bytes to %s", len(result), outputPath)
+	e.context.SetResult(step.Name, fmt.Sprintf("wrote %d bytes to %s", len(result), outputPath))
 	return output, nil
 }
 

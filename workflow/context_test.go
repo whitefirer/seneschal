@@ -45,7 +45,7 @@ func TestResolveTemplate(t *testing.T) {
 		{"empty string", "", "", false},
 		{"result var", "step1={{.step1}}", "step1=hello", false},
 		{"mixed", "{{.name}} has {{.count}} items", "world has 42 items", false},
-		{"missing var", "{{.missing}}", "", false},
+		{"missing var", "{{.missing}}", "<no value>", false},
 	}
 
 	for _, tt := range tests {
