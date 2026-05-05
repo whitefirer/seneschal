@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -297,7 +298,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate execution ID
-	executionID := fmt.Sprintf("exec-%s", time.Now().Format("20060102-150405"))
+	executionID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHex(4))
 
 	// Merge variables
 	vars := make(map[string]string)
@@ -967,4 +968,10 @@ func (h *Handler) WSHandler(w http.ResponseWriter, r *http.Request) {
 
 	go client.WritePump()
 	go client.ReadPump()
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }
