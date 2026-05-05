@@ -10,9 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	exprlib "github.com/expr-lang/expr"
 )
 
 // StepCallback is called after each step completes (including nested steps).
@@ -1509,79 +1512,20 @@ func (e *Executor) execCondition(step Step, depth int) (string, []StepResult, []
 	return strings.Join(outputs, "\n"), execChildren, skippedChildren, result, nil
 }
 
-// evaluateExpression evaluates a simple boolean expression.
+// evaluateExpression evaluates a boolean expression using expr-lang/expr
+// with legacy fallback for template-resolved string comparisons.
 func (e *Executor) evaluateExpression(expr string) (bool, error) {
-	expr = strings.TrimSpace(expr)
+	expression := strings.TrimSpace(expr)
 
-	// Resolve any remaining template variables in the expression
-	resolved, err := e.context.ResolveTemplate(expr)
+	// Resolve template variables for backward compat ({{.var}} → value)
+	resolved, err := e.context.ResolveTemplate(expression)
 	if err != nil {
 		return false, err
 	}
-	expr = strings.TrimSpace(resolved)
+	expression = strings.TrimSpace(resolved)
 
-	// Handle "contains" operator
-	if strings.Contains(expr, " contains ") {
-		parts := strings.SplitN(expr, " contains ", 2)
-		left := strings.TrimSpace(parts[0])
-		right := strings.TrimSpace(parts[1])
-		return strings.Contains(left, right), nil
-	}
-
-	// Handle "==" operator
-	if strings.Contains(expr, " == ") {
-		parts := strings.SplitN(expr, " == ", 2)
-		left := strings.TrimSpace(parts[0])
-		right := strings.TrimSpace(parts[1])
-		return left == right, nil
-	}
-
-	// Handle "!=" operator
-	if strings.Contains(expr, " != ") {
-		parts := strings.SplitN(expr, " != ", 2)
-		left := strings.TrimSpace(parts[0])
-		right := strings.TrimSpace(parts[1])
-		return left != right, nil
-	}
-
-	// Handle ">" operator
-	if strings.Contains(expr, " > ") && !strings.Contains(expr, " >= ") {
-		parts := strings.SplitN(expr, " > ", 2)
-		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), ">")
-	}
-
-	// Handle "<" operator
-	if strings.Contains(expr, " < ") && !strings.Contains(expr, " <= ") {
-		parts := strings.SplitN(expr, " < ", 2)
-		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "<")
-	}
-
-	// Handle ">=" operator
-	if strings.Contains(expr, " >= ") {
-		parts := strings.SplitN(expr, " >= ", 2)
-		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), ">=")
-	}
-
-	// Handle "<=" operator
-	if strings.Contains(expr, " <= ") {
-		parts := strings.SplitN(expr, " <= ", 2)
-		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "<=")
-	}
-
-	// Handle "empty" keyword
-	if strings.HasSuffix(expr, " == empty") || strings.HasSuffix(expr, " == \"\"") {
-		parts := strings.SplitN(expr, " ==", 2)
-		left := strings.TrimSpace(parts[0])
-		return left == "" || left == "\"\"", nil
-	}
-	if strings.HasSuffix(expr, " != empty") || strings.HasSuffix(expr, " != \"\"") {
-		parts := strings.SplitN(expr, " !=", 2)
-		left := strings.TrimSpace(parts[0])
-		return left != "" && left != "\"\"", nil
-	}
-
-	// Boolean-like values
-	lower := strings.ToLower(expr)
+	// Boolean-like literals
+	lower := strings.ToLower(expression)
 	if lower == "true" || lower == "1" || lower == "yes" {
 		return true, nil
 	}
@@ -1589,7 +1533,74 @@ func (e *Executor) evaluateExpression(expr string) (bool, error) {
 		return false, nil
 	}
 
-	return false, fmt.Errorf("unsupported expression: %s", expr)
+	// Try expr-lang/expr with context variables as environment
+	snapshot := e.context.Snapshot()
+	env := make(map[string]interface{}, len(snapshot)+2)
+	for k, v := range snapshot {
+		env[k] = v
+		// Also store numeric version for comparison operators
+		if n, nerr := strconv.ParseFloat(v, 64); nerr == nil {
+			env[k] = n
+		}
+	}
+	env["contains"] = func(s, substr string) bool { return strings.Contains(s, substr) }
+
+	program, compileErr := exprlib.Compile(expression, exprlib.Env(env))
+	if compileErr != nil {
+		return evaluateLegacy(expression)
+	}
+
+	result, runErr := exprlib.Run(program, env)
+	if runErr != nil {
+		return evaluateLegacy(expression)
+	}
+
+	if b, ok := result.(bool); ok {
+		return b, nil
+	}
+
+	return false, fmt.Errorf("expression does not evaluate to boolean: %s", expression)
+}
+
+// evaluateLegacy provides backward-compatible string comparison.
+func evaluateLegacy(expr string) (bool, error) {
+	// contains
+	if strings.Contains(expr, " contains ") {
+		parts := strings.SplitN(expr, " contains ", 2)
+		return strings.Contains(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])), nil
+	}
+	// ==
+	if strings.Contains(expr, " == ") {
+		parts := strings.SplitN(expr, " == ", 2)
+		return strings.TrimSpace(parts[0]) == strings.TrimSpace(parts[1]), nil
+	}
+	// !=
+	if strings.Contains(expr, " != ") {
+		parts := strings.SplitN(expr, " != ", 2)
+		return strings.TrimSpace(parts[0]) != strings.TrimSpace(parts[1]), nil
+	}
+	// >=
+	if strings.Contains(expr, " >= ") {
+		parts := strings.SplitN(expr, " >= ", 2)
+		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), ">=")
+	}
+	// <=
+	if strings.Contains(expr, " <= ") {
+		parts := strings.SplitN(expr, " <= ", 2)
+		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "<=")
+	}
+	// >
+	if strings.Contains(expr, " > ") {
+		parts := strings.SplitN(expr, " > ", 2)
+		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), ">")
+	}
+	// <
+	if strings.Contains(expr, " < ") {
+		parts := strings.SplitN(expr, " < ", 2)
+		return compareValues(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), "<")
+	}
+
+	return expr != "", nil
 }
 
 // execSet sets a variable in the context and returns the output.
