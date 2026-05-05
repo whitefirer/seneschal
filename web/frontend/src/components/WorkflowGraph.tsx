@@ -467,7 +467,6 @@ function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, i
           successors.get(targetId)?.add(s.id)
           predecessors.get(s.id)?.add(targetId)
           explicitEdgeCount++
-          console.log(`[DAGLayout] Step '${s.id}' depends_on '${targetId}'`)
         } else {
           console.warn(`[DAGLayout] Step '${s.id}' depends_on '${depId}', but target not found!`)
         }
@@ -484,7 +483,6 @@ function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, i
           successors.get(s.id)?.add(targetId)
           predecessors.get(targetId)?.add(s.id)
           explicitEdgeCount++
-          console.log(`[DAGLayout] Step '${s.id}' next is '${targetId}'`)
         } else {
           console.warn(`[DAGLayout] Step '${s.id}' next is '${nextId}', but target not found!`)
         }
@@ -492,13 +490,11 @@ function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, i
     }
   })
 
-  console.log(`[DAGLayout] explicitEdgeCount: ${explicitEdgeCount}, isParallelContainer: ${isParallelContainer}`)
 
   // 3. 隐式依赖回退 (仅限非并行容器)
   // 修改策略：不再依赖全局 explicitEdgeCount，而是为每个无 depends_on 的节点（且非首个）添加前驱依赖
   // 这保证了线性流程（包括 Condition 后、Parallel 后）的节点不会重叠
   if (!isParallelContainer && steps.length > 1) {
-    console.log('[DAGLayout] Applying local implicit dependency fallback')
     for (let i = 1; i < steps.length; i++) {
       const curr = steps[i]
       const prev = steps[i - 1]
@@ -557,7 +553,6 @@ function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, i
   const visited = new Set<string>()
   steps.forEach(s => computeLevel(s.id, visited))
 
-  console.log('[DAGLayout] Computed levels:', Object.fromEntries(levels))
 
   // 按层级分组
   const levelGroups = new Map<number, FlowStep[]>()
@@ -689,7 +684,6 @@ function calculateLayout(
       const { filtered, originalIterations, skippedIterations } = filterForeachChildren(step.children, step.items?.length)
       if (filtered.length > 0) {
         // DEBUG: 检查 Foreach 子节点是否包含不该有的节点（如 complete）
-        console.log(`[ForeachLayout] ${step.id} children IDs:`, filtered.map(c => c.id))
         
         const childrenStartX = node.position.x
         const childrenStartY = node.position.y + NODE_HEIGHT + PARENT_CHILD_GAP
@@ -2088,9 +2082,7 @@ export function WorkflowGraph({ steps, executionSteps = [], onNodeClick, showMin
 
   // 所有 hooks 必须在早期返回之前
   const { nodes: positionedNodes, foreachGroups, parallelGroups } = useMemo(() => {
-    console.log(`[WorkflowGraph] [v20260426] Steps received: ${enrichedSteps?.length || 0}`)
     if (enrichedSteps?.length > 0) {
-      console.log('[WorkflowGraph] First step:', enrichedSteps[0])
     }
     if (!enrichedSteps || enrichedSteps.length === 0) return { nodes: [], nextX: 0, maxY: 0, foreachGroups: new Map(), parallelGroups: new Map() }
     return calculateLayout(enrichedSteps, 50, 50)
@@ -2330,7 +2322,6 @@ export function WorkflowGraph({ steps, executionSteps = [], onNodeClick, showMin
 
 // 工具函数
 export function workflowToFlowSteps(workflowSteps: any[]): FlowStep[] {
-  console.log('[workflowToFlowSteps] Input:', workflowSteps)
   const result = workflowSteps.map((step, index) => {
     const converted = {
       id: step.id || `step-${index}`,
@@ -2377,11 +2368,8 @@ export function workflowToFlowSteps(workflowSteps: any[]): FlowStep[] {
       logMessage: step.logMessage || step.message,
     }
     if (step.action === 'condition') {
-      console.log('[workflowToFlowSteps] Condition step:', step.id, 'condition_result:', step.condition_result, 'typeof:', typeof step.condition_result)
-      console.log('[workflowToFlowSteps] Converted:', converted.id, 'condition_result:', converted.condition_result)
     }
     return converted
   })
-  console.log('[workflowToFlowSteps] Output:', result)
   return result
 }

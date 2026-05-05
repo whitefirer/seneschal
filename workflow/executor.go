@@ -747,13 +747,6 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		}
 	}
 	
-	// Debug: log what's being returned
-	fmt.Fprintf(os.Stderr, "DEBUG executeForeach: container.Name=%s, container.Action=%s, len(allChildren)=%d\n", 
-		container.Name, container.Action, len(allChildren))
-	for i, child := range allChildren {
-		fmt.Fprintf(os.Stderr, "  Child[%d]: name=%s, action=%s\n", i, child.Name, child.Action)
-	}
-	
 	return StepResult{
 		Name:     container.Name,
 		Action:   container.Action,
@@ -1009,13 +1002,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		return containerResult
 	}
 	
-	// Debug: log what's being returned
-	fmt.Fprintf(os.Stderr, "DEBUG executeContainerDAG: container.Name=%s, container.Action=%s, len(containerChildren)=%d\n", 
-		container.Name, container.Action, len(containerChildren))
-	for i, child := range containerChildren {
-		fmt.Fprintf(os.Stderr, "  Child[%d]: name=%s, action=%s\n", i, child.Name, child.Action)
-	}
-	
 	containerResult := StepResult{
 		ID:     containerStepID,
 		Name:   container.Name,
@@ -1028,8 +1014,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		containerResult.Children = nil
 		// Determine which branch was executed based on condition result
 		evalResult, _ := e.evaluateExpression(container.Expression)
-		fmt.Fprintf(os.Stderr, "DEBUG Condition container %s: evalResult=%v, len(container.Then)=%d, len(container.Else)=%d\n", 
-			container.Name, evalResult, len(container.Then), len(container.Else))
 		if evalResult {
 			containerResult.ThenChildren = containerChildren // Executed branch
 			// Create skipped results for else branch
@@ -1038,7 +1022,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				skippedElse = append(skippedElse, createSkippedStepResult(s))
 			}
 			containerResult.ElseChildren = skippedElse
-			fmt.Fprintf(os.Stderr, "  Set ThenChildren=%d, ElseChildren=%d\n", len(containerResult.ThenChildren), len(containerResult.ElseChildren))
 		} else {
 			containerResult.ElseChildren = containerChildren // Executed branch
 			// Create skipped results for then branch
@@ -1047,7 +1030,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				skippedThen = append(skippedThen, createSkippedStepResult(s))
 			}
 			containerResult.ThenChildren = skippedThen
-			fmt.Fprintf(os.Stderr, "  Set ElseChildren=%d, ThenChildren=%d\n", len(containerResult.ElseChildren), len(containerResult.ThenChildren))
 		}
 	} else {
 		// For parallel/foreach/loop, set Children

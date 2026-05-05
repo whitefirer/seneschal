@@ -198,7 +198,6 @@ export default function Execution() {
     const updateWithParent = (stepList: Step[]): Step[] => {
       return stepList.map((step) => {
         if (step.id === stepId) {
-          console.log('Found and updating step:', stepId, 'with:', updates)
           return { ...step, ...updates }
         }
         // 处理 children
@@ -211,7 +210,6 @@ export default function Execution() {
           let parentUpdates = {}
           if (allChildrenComplete) {
             parentUpdates = { status: anyChildFailed ? 'failed' : 'success' as Step['status'] }
-            console.log('All children complete, updating parent:', step.name, 'to:', parentUpdates)
           }
           
           return { 
@@ -233,7 +231,6 @@ export default function Execution() {
       })
     }
     const result = updateWithParent(steps)
-    console.log('updateStepInTree result for', stepId, ':', result)
     return result
   }, [])
 
@@ -290,7 +287,6 @@ export default function Execution() {
 
       case 'step_start': {
         const targetId = actualStepId || actualName || ''
-        console.log('Updating step to running:', targetId)
         setSteps((prev) => updateStepInTree(prev, targetId, {
           status: 'running',
           startTime: actualTimestamp,
@@ -301,7 +297,6 @@ export default function Execution() {
 
       case 'step_complete': {
         const targetId = actualStepId || actualName || ''
-        console.log('Updating step to complete:', targetId, 'status:', event.status, 'conditionResult:', actualConditionResult)
         const updates: Partial<Step> = {
           status: event.status as Step['status'] || 'success',
           endTime: actualTimestamp,
@@ -316,13 +311,11 @@ export default function Execution() {
       }
 
       case 'step_output':
-        console.log('[DEBUG] step_output event:', actualStepId, actualName, 'output:', event.output?.substring(0, 100))
         setSteps((prev) => {
           const updateOutput = (steps: Step[]): Step[] => {
             return steps.map((step) => {
               // 检查当前节点是否匹配
               if (step.id === actualStepId || step.name === actualName) {
-                console.log('[DEBUG] Matched step:', step.id, step.name, 'updating output')
                 return { ...step, output: (step.output || '') + (event.output || '') + '\n' }
               }
               
@@ -353,7 +346,6 @@ export default function Execution() {
             })
           }
           const result = updateOutput(prev)
-          console.log('[DEBUG] updateOutput result:', result)
           return result
         })
         break
@@ -702,7 +694,6 @@ export default function Execution() {
       setStatus(data.status as 'running' | 'success' | 'failed')
       
       // DEBUG: Log raw data
-      console.log('=== RAW EXECUTION DATA ===', JSON.stringify(data, null, 2))
       
       // Convert steps with children structure (preserve tree)
       const convertSteps = (steps: any[], parentId?: string, childIndex = 0): Step[] => {
@@ -766,10 +757,8 @@ export default function Execution() {
       
       if (data.steps && data.steps.length > 0) {
         const newSteps = convertSteps(data.steps)
-        console.log('=== CONVERTED STEPS ===')
         const printSteps = (steps: Step[], indent = '') => {
           steps.forEach(s => {
-            console.log(`${indent}- ${s.id} (${s.name}): ${s.status}`)
             if (s.children && s.children.length > 0) {
               printSteps(s.children, indent + '  ')
             }
@@ -1149,7 +1138,6 @@ export default function Execution() {
               onNodeClick={(step, viewportPosition) => {
                 // Find step in the original tree structure by ID
                 const found = findStepById(steps, step.id)
-                console.log('Node clicked:', step.id, 'Found:', found, 'viewportPosition:', viewportPosition)
                 if (found) {
                   // 设置详情面板位置：屏幕中央偏右，但不超出屏幕
                   const panelWidth = 384 // w-96 = 24rem = 384px

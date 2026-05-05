@@ -585,7 +585,6 @@ export default function WorkflowGraphEditor({
         },
       }
       
-      console.log('[stepsToNodes] Created node:', nodeId, step.name, 'parentId:', parentId, 'action:', step.action)
       result.push(node)
       
       // 递归处理子节点
@@ -614,7 +613,6 @@ export default function WorkflowGraphEditor({
   // 检查当前节点状态是否与初始状态相同（比较节点顺序 + data 内容）
   const checkIfHasChanges = useCallback((currentNodes: GraphNode[]) => {
     if (!originalStepsHash) {
-      console.log('[checkIfHasChanges] No originalStepsHash, returning false')
       return false
     }
     
@@ -658,35 +656,28 @@ export default function WorkflowGraphEditor({
     })
     
     const hasChanges = currentSnapshot !== originalStepsHash
-    console.log('[checkIfHasChanges] hasChanges:', hasChanges)
     if (hasChanges) {
       // 详细比较找出差异
       try {
         const orig = JSON.parse(originalStepsHash)
         const curr = JSON.parse(currentSnapshot)
         
-        console.log('[checkIfHasChanges] Original order:', orig.order)
-        console.log('[checkIfHasChanges] Current order:', curr.order)
         
         // 比较顺序
         if (JSON.stringify(orig.order) !== JSON.stringify(curr.order)) {
-          console.log('[checkIfHasChanges] Order changed!')
         }
         
         // 比较数据
         if (JSON.stringify(orig.data) !== JSON.stringify(curr.data)) {
-          console.log('[checkIfHasChanges] Data changed!')
           // 找出具体哪个字段变化
           for (let i = 0; i < Math.max(orig.data.length, curr.data.length); i++) {
             const o = orig.data[i]
             const c = curr.data[i]
             if (!o || !c || o.id !== c.id) {
-              console.log('[checkIfHasChanges] Data mismatch at index', i, ':', o?.id, 'vs', c?.id)
               continue
             }
             Object.keys(o.data).forEach(key => {
               if (JSON.stringify(o.data[key]) !== JSON.stringify(c.data[key])) {
-                console.log('  ' + o.id + '.data.' + key + ':', JSON.stringify(o.data[key]), '->', JSON.stringify(c.data[key]))
               }
             })
           }
@@ -897,20 +888,15 @@ export default function WorkflowGraphEditor({
     // 布局主流程（水平排列）
     layoutBranch(rootNodes, H_SPACING, startY)
     
-    console.log('[buildEdges] Starting, rootNodes count:', rootNodes.length)
-    console.log('[buildEdges] rootNodes:', rootNodes.map(n => ({ id: n.id, name: n.data.name, action: n.data.action })))
     
     // 生成边
     const buildEdges = (nodeList: GraphNode[], parentId?: string) => {
-      console.log('[buildEdges] Called with', nodeList.length, 'nodes, parentId:', parentId)
       
       nodeList.forEach((node, index) => {
-        console.log('[buildEdges] Processing node:', node.data.name, 'index:', index, 'parentId:', parentId)
         
         // 父节点 → 当前节点
         if (parentId && index === 0) {
           const branchType = node.data.branchType
-          console.log('[buildEdges] Creating edge from parent:', parentId, 'to:', node.id, 'branchType:', branchType)
           
           const edgeColor = branchType === 'then' ? '#22c55e' : 
                            branchType === 'else' ? '#ef4444' :
@@ -940,7 +926,6 @@ export default function WorkflowGraphEditor({
         // 当前节点 → 下一个节点（主流程）
         if (index < nodeList.length - 1) {
           const nextNode = nodeList[index + 1]
-          console.log('[buildEdges] Creating edge from:', node.id, 'to:', nextNode.id)
           edges.push({
             id: `edge-${node.id}-${nextNode.id}`,
             source: node.id,
@@ -963,7 +948,6 @@ export default function WorkflowGraphEditor({
             n => n.data.parentId === node.id && n.data.branchType === 'else'
           ).sort((a, b) => (a.data.branchIndex || 0) - (b.data.branchIndex || 0))
           
-          console.log('[buildEdges] Found', thenChildren.length, 'then children and', elseChildren.length, 'else children for node:', node.data.name)
           
           // 找到 condition 后的下一个节点
           const nodeIndex = nodeList.findIndex(n => n.id === node.id)
@@ -1127,8 +1111,6 @@ export default function WorkflowGraphEditor({
     
     buildEdges(rootNodes)
     
-    console.log('[WorkflowGraphEditor] buildEdges complete, edges count:', edges.length)
-    console.log('[WorkflowGraphEditor] edges:', edges.map(e => ({ id: e.id, source: e.source, target: e.target })))
     
     // 添加容器节点（zIndex: -1 让它们在普通节点下方）
     const containerNodes: GraphNode[] = []
@@ -1303,7 +1285,6 @@ export default function WorkflowGraphEditor({
 
   // 更新节点数据
   const updateNodeData = useCallback((nodeId: string, newData: Partial<GraphNodeData>) => {
-    console.log('[updateNodeData] Called for node:', nodeId, 'newData:', newData)
     setNodes(prev => {
       const node = prev.find(n => n.id === nodeId)
       if (!node) return prev
@@ -1333,7 +1314,6 @@ export default function WorkflowGraphEditor({
       
       // 智能检测：只有真正有变化时才设置 hasUnsavedChanges
       const hasChanges = checkIfHasChanges(laidOutNodes)
-      console.log('[updateNodeData] checkIfHasChanges result:', hasChanges)
       setHasUnsavedChanges(hasChanges)
       
       return laidOutNodes
@@ -1375,7 +1355,6 @@ export default function WorkflowGraphEditor({
 
   // 处理节点拖动结束 - 根据坐标重新计算 branchIndex
   const onNodeDragStop = useCallback((_event: any, node: any) => {
-    console.log('[onNodeDragStop] Node dragged:', node.id, 'position:', node.position)
     
     // 先恢复所有节点层级
     setNodes(prev => prev.map(n => ({ ...n, style: { ...n.style, zIndex: 1 } })))
@@ -1395,16 +1374,13 @@ export default function WorkflowGraphEditor({
         
         // 保存拖动前的节点 ID 顺序（按 position.x 排序）
         const beforeOrder = [...rootNodes].sort((a, b) => a.position.x - b.position.x).map(n => n.id)
-        console.log('[onNodeDragStop] Before order:', beforeOrder)
         
         // 根据拖动后的 x 坐标重新排序
         rootNodes.sort((a, b) => a.position.x - b.position.x)
         const afterOrder = rootNodes.map(n => n.id)
-        console.log('[onNodeDragStop] After order:', afterOrder)
         
         // 检查顺序是否真的改变
         const orderChanged = JSON.stringify(beforeOrder) !== JSON.stringify(afterOrder)
-        console.log('[onNodeDragStop] Order changed:', orderChanged)
         
         // 总是更新 branchIndex（用于 nodesToSteps 排序）
         rootNodes.forEach((node, index) => {
@@ -1417,7 +1393,6 @@ export default function WorkflowGraphEditor({
         // 智能检测：只有顺序真正改变时才设置 hasUnsavedChanges
         setTimeout(() => {
           const hasChanges = orderChanged ? true : checkIfHasChanges(laidOutNodes)
-          console.log('[onNodeDragStop] orderChanged:', orderChanged, 'checkIfHasChanges:', hasChanges)
           setHasUnsavedChanges(hasChanges)
         }, 0)
         
@@ -1431,16 +1406,13 @@ export default function WorkflowGraphEditor({
         
         // 保存拖动前的节点 ID 顺序（按 position.y 排序）
         const beforeOrder = [...siblings].sort((a, b) => a.position.y - b.position.y).map(n => n.id)
-        console.log('[onNodeDragStop] Sub-node before order:', beforeOrder)
         
         // 根据拖动后的 y 坐标重新排序
         siblings.sort((a, b) => a.position.y - b.position.y)
         const afterOrder = siblings.map(n => n.id)
-        console.log('[onNodeDragStop] Sub-node after order:', afterOrder)
         
         // 检查顺序是否真的改变
         const orderChanged = JSON.stringify(beforeOrder) !== JSON.stringify(afterOrder)
-        console.log('[onNodeDragStop] Sub-node order changed:', orderChanged)
         
         // 总是更新 branchIndex（用于 nodesToSteps 排序）
         siblings.forEach((node, index) => {
@@ -1453,7 +1425,6 @@ export default function WorkflowGraphEditor({
         // 智能检测：只有顺序真正改变时才设置 hasUnsavedChanges
         setTimeout(() => {
           const hasChanges = orderChanged ? true : checkIfHasChanges(laidOutNodes)
-          console.log('[onNodeDragStop] Sub-node orderChanged:', orderChanged, 'checkIfHasChanges:', hasChanges)
           setHasUnsavedChanges(hasChanges)
         }, 0)
         
@@ -1540,7 +1511,6 @@ export default function WorkflowGraphEditor({
     // 使用新的 DAG 转换器
     const steps = dagToYaml(nodes)
     const yamlObj = { steps }
-    console.log('[handleSave] Converted to YAML:', yamlObj)
     onSave?.(yamlObj)
     
     // 保存后更新状态
@@ -1561,7 +1531,6 @@ export default function WorkflowGraphEditor({
     // 使用新的 DAG 转换器
     const steps = dagToYaml(nodes)
     const yamlObj = { steps }
-    console.log('[handleRun] Converted to YAML:', yamlObj)
     onRun?.(yamlObj)
   }, [nodes, onRun, validateNodes])
 
@@ -1569,14 +1538,10 @@ export default function WorkflowGraphEditor({
 
   // @ts-ignore - 类型转换
   useEffect(() => {
-    console.log('[WorkflowGraphEditor] useEffect triggered, initialSteps:', initialSteps?.length)
     if (initialSteps && initialSteps.length > 0) {
-      console.log('[WorkflowGraphEditor] Converting steps to nodes using yamlToDAG...')
       // 使用新的 DAG 转换器（自动推断依赖）
       const dagNodes = yamlToDAG({ steps: initialSteps } as any)
-      console.log('[WorkflowGraphEditor] Created', dagNodes.length, 'nodes')
       const { nodes: laidOutNodes, edges: newEdges } = calculateLayout(dagNodes)
-      console.log('[WorkflowGraphEditor] Layout complete, nodes:', laidOutNodes.map(n => ({ name: n.data.name, pos: n.position })))
       setNodes(laidOutNodes)
       setEdges(newEdges)
       
@@ -1620,10 +1585,8 @@ export default function WorkflowGraphEditor({
       })
       setOriginalStepsHash(snapshot)
       
-      console.log('[WorkflowGraphEditor] Setting hasUnsavedChanges to false')
       setHasUnsavedChanges(false)  // 明确设置为未修改状态
     } else {
-      console.log('[WorkflowGraphEditor] No initialSteps, skipping')
     }
   }, [initialSteps, yamlToDAG, calculateLayout])
 

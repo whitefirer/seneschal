@@ -656,11 +656,6 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			convertSteps = func(steps []workflow.StepResult) []StepResult {
 				result := make([]StepResult, len(steps))
 				for i, s := range steps {
-					fmt.Fprintf(os.Stderr, "DEBUG convertSteps: s.Name=%s, s.Action=%s, len(s.Children)=%d\n", 
-						s.Name, s.Action, len(s.Children))
-					for j, child := range s.Children {
-						fmt.Fprintf(os.Stderr, "  s.Child[%d]: name=%s, action=%s\n", j, child.Name, child.Action)
-					}
 					result[i] = StepResult{
 						ID:              s.ID,
 						Name:            s.Name,
@@ -695,13 +690,6 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			// Update steps with results (preserve action from pre-populated steps)
 			var updateStep func(existing *StepResult, result StepResult, wfSteps []workflow.Step)
 			updateStep = func(ex *StepResult, sr StepResult, wfSteps []workflow.Step) {
-				// Debug logging
-				fmt.Fprintf(os.Stderr, "DEBUG updateStep: ex.Name=%s, ex.Action=%s, sr.Name=%s, sr.Action=%s, sr.Children.len=%d\n", 
-					ex.Name, ex.Action, sr.Name, sr.Action, len(sr.Children))
-				for i, child := range sr.Children {
-					fmt.Fprintf(os.Stderr, "  sr.Child[%d]: name=%s, action=%s\n", i, child.Name, child.Action)
-				}
-				
 				// Store original ID for lookup before overwriting
 				lookupKey := ex.ID
 				if lookupKey == "" {
@@ -775,15 +763,11 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 				} else if ex.Action == "condition" {
 					// For condition: update ThenChildren and ElseChildren
 					// Clear Children (condition uses then_children and else_children)
-					fmt.Fprintf(os.Stderr, "DEBUG updateStep Condition: ex.Name=%s, sr.ThenChildren.len=%d, sr.ElseChildren.len=%d\n",
-						ex.Name, len(sr.ThenChildren), len(sr.ElseChildren))
 					ex.Children = nil
 					if sr.ThenChildren != nil {
-						fmt.Fprintf(os.Stderr, "  Setting ex.ThenChildren with %d items\n", len(sr.ThenChildren))
 						ex.ThenChildren = sr.ThenChildren
 					}
 					if sr.ElseChildren != nil {
-						fmt.Fprintf(os.Stderr, "  Setting ex.ElseChildren with %d items\n", len(sr.ElseChildren))
 						ex.ElseChildren = sr.ElseChildren
 					}
 				} else {
@@ -836,14 +820,12 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					}
 					if key != "" {
 						if sr, ok := resultMap[key]; ok {
-							fmt.Fprintf(os.Stderr, "DEBUG updateTree: MATCH ex.Name=%s to sr.Name=%s\n", ex.Name, sr.Name)
 							updateStep(ex, sr, wfSteps)
 							// Remove from map to avoid processing again
 							delete(resultMap, key)
 						} else if ex.Name != "" {
 							// Also try to match by name (for container nodes without ID in results)
 							if sr, ok := resultMap[ex.Name]; ok {
-								fmt.Fprintf(os.Stderr, "DEBUG updateTree: MATCH by NAME ex.Name=%s to sr.Name=%s\n", ex.Name, sr.Name)
 								updateStep(ex, sr, wfSteps)
 								delete(resultMap, ex.Name)
 							}
@@ -851,7 +833,6 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					} else if ex.Name != "" {
 						// Try to match by name if ID is empty
 						if sr, ok := resultMap[ex.Name]; ok {
-							fmt.Fprintf(os.Stderr, "DEBUG updateTree: MATCH ex.Name=%s (no ID) to sr.Name=%s\n", ex.Name, sr.Name)
 							updateStep(ex, sr, wfSteps)
 							delete(resultMap, ex.Name)
 						}

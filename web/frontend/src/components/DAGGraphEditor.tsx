@@ -779,10 +779,8 @@ const DAGGraphEditor = ({ initialSteps, onSave, onRun, readOnly = false }: DAGGr
           onConnect={handleConnect}
           onPaneClick={handlePaneClick}
           onNodeDragStart={() => {
-            console.log('[ReactFlow] Node drag start')
           }}
           onNodeDragStop={() => {
-            console.log('[ReactFlow] Node drag stop')
             setHasUnsavedChanges(true)
           }}
           onNodesDelete={(deleted) => {
