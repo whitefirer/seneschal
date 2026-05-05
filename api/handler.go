@@ -16,27 +16,28 @@ import (
 	"goworkflow/workflow"
 )
 
-var upgrader = websocket.Upgrader{
+var defaultUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for now
-	},
 }
 
 // Handler handles HTTP requests
 type Handler struct {
 	hub          *WSHub
 	workflowsDir string
+	upgrader     websocket.Upgrader
 	executions   map[string]*ExecutionDetail
 	execMu       sync.RWMutex
 }
 
 // NewHandler creates a new API handler
-func NewHandler(hub *WSHub, workflowsDir string) *Handler {
+func NewHandler(hub *WSHub, workflowsDir string, checkOrigin func(r *http.Request) bool) *Handler {
+	upgrader := defaultUpgrader
+	upgrader.CheckOrigin = checkOrigin
 	return &Handler{
 		hub:          hub,
 		workflowsDir: workflowsDir,
+		upgrader:     upgrader,
 		executions:   make(map[string]*ExecutionDetail),
 	}
 }
@@ -950,7 +951,7 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 
 // WSHandler handles WebSocket connections
 func (h *Handler) WSHandler(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

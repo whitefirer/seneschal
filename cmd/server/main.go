@@ -11,18 +11,37 @@ import (
 
 	"github.com/gorilla/mux"
 	"goworkflow/api"
+	"goworkflow/config"
 	"goworkflow/web"
 )
 
 var staticFiles = web.StaticFiles
 
 func main() {
-	// Determine workflows directory
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		homeDir = "/tmp"
+	// Load config
+	configPath := config.ConfigFlag()
+	if configPath == "" {
+		configPath = "server.yaml"
 	}
-	workflowsDir := filepath.Join(homeDir, "Desktop", "Devspace", "goworkflow", "workflows", "user")
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		log.Printf("Warning: failed to load config: %v, using defaults", err)
+		cfg = config.Default()
+	}
+
+	// CLI flags override config
+	if p := config.PortFlag(); p != "" {
+		cfg.Port = p
+	}
+
+	// Resolve workflows directory
+	workflowsDir := cfg.WorkflowsDir
+	if !filepath.IsAbs(workflowsDir) {
+		if wd, err := os.Getwd(); err == nil {
+			workflowsDir = filepath.Join(wd, workflowsDir)
+		}
+	}
 
 	// Create workflows directory if not exists
 	if err := os.MkdirAll(workflowsDir, 0755); err != nil {
@@ -32,14 +51,16 @@ func main() {
 	// Copy example workflows if directory is empty
 	entries, _ := os.ReadDir(workflowsDir)
 	if len(entries) == 0 {
-		examplesDir := filepath.Join(homeDir, "Desktop", "Devspace", "goworkflow", "examples")
-		if files, err := os.ReadDir(examplesDir); err == nil {
-			for _, f := range files {
-				if !f.IsDir() && (filepath.Ext(f.Name()) == ".yaml" || filepath.Ext(f.Name()) == ".yml") {
-					src := filepath.Join(examplesDir, f.Name())
-					dst := filepath.Join(workflowsDir, f.Name())
-					if data, err := os.ReadFile(src); err == nil {
-						os.WriteFile(dst, data, 0644)
+		if wd, err := os.Getwd(); err == nil {
+			examplesDir := filepath.Join(wd, "examples")
+			if files, err := os.ReadDir(examplesDir); err == nil {
+				for _, f := range files {
+					if !f.IsDir() && (filepath.Ext(f.Name()) == ".yaml" || filepath.Ext(f.Name()) == ".yml") {
+						src := filepath.Join(examplesDir, f.Name())
+						dst := filepath.Join(workflowsDir, f.Name())
+						if data, err := os.ReadFile(src); err == nil {
+							os.WriteFile(dst, data, 0644)
+						}
 					}
 				}
 			}
@@ -51,7 +72,7 @@ func main() {
 	go hub.Run()
 
 	// Create API handler
-	handler := api.NewHandler(hub, workflowsDir)
+	handler := api.NewHandler(hub, workflowsDir, cfg.CheckOrigin())
 
 	// Setup routes using gorilla/mux
 	r := mux.NewRouter()
@@ -72,20 +93,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create static FS: %v", err)
 	}
-	
-	// Create a custom file server that handles SPA routing
+
 	fileServer := http.FileServer(http.FS(staticFS))
-	
+
 	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check if file exists in the filesystem
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
 		}
-		
+
 		_, err := staticFS.Open(path)
 		if err != nil {
-			// File doesn't exist, serve index.html for SPA routing
 			indexData, readErr := fs.ReadFile(staticFS, "index.html")
 			if readErr != nil {
 				http.NotFound(w, r)
@@ -96,18 +114,11 @@ func main() {
 			w.Write(indexData)
 			return
 		}
-		
-		// File exists, serve it
+
 		fileServer.ServeHTTP(w, r)
 	})
 
-	// Start server
-	port := "8888"
-	if len(os.Args) > 2 && os.Args[1] == "--port" {
-		port = os.Args[2]
-	}
-
-	addr := fmt.Sprintf(":%s", port)
+	addr := fmt.Sprintf(":%s", cfg.Port)
 	fmt.Printf("\n")
 	fmt.Printf("  ╔═══════════════════════════════════════════╗\n")
 	fmt.Printf("  ║     goworkflow Web UI Server              ║\n")
@@ -115,6 +126,10 @@ func main() {
 	fmt.Printf("\n")
 	fmt.Printf("  🌐 Server:  http://localhost%s\n", addr)
 	fmt.Printf("  📁 Workflows: %s\n", workflowsDir)
+	fmt.Printf("  📋 Config: %s\n", configPath)
+	if len(cfg.AllowedOrigins) > 0 {
+		fmt.Printf("  🔒 Origins: %v\n", cfg.AllowedOrigins)
+	}
 	fmt.Printf("\n")
 	fmt.Printf("  Press Ctrl+C to stop\n")
 	fmt.Printf("\n")
