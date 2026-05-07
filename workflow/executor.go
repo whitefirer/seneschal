@@ -461,7 +461,7 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 				   node.Step.Action == "foreach" || node.Step.Action == "loop" {
 					stepResult = e.executeContainerDAG(node.Step, 0, result)
 				} else {
-					stepResult = e.executeStep(node.Step, 0)
+					stepResult = e.executeStep(node.Step, 0, result)
 				}
 
 				resultsMutex.Lock()
@@ -558,7 +558,7 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 
 // executeForeach 执行 foreach/loop 迭代
 
-func (e *Executor) executeStep(step Step, depth int) StepResult {
+func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) StepResult {
 	indent := strings.Repeat("  ", depth)
 	startTime := Now()
 
@@ -619,7 +619,7 @@ func (e *Executor) executeStep(step Step, depth int) StepResult {
 		result.HTTPMethod = step.Method
 	case "condition":
 		var execChildren, skippedChildren []StepResult
-		output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth)
+		output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult)
 		result.ConditionResult = &condResult
 		result.Expression = step.Expression
 		// Condition: 设置 ThenChildren 和 ElseChildren
@@ -641,11 +641,16 @@ func (e *Executor) executeStep(step Step, depth int) StepResult {
 		output = e.execLog(step)
 		result.LogMessage = step.Message
 	case "parallel":
-		output, children, err = e.execParallel(step, depth)
+		output, children, err = e.execParallel(step, depth, wfResult)
 	case "template":
 		output, err = e.execTemplate(step)
 	case "foreach":
-		output, children, err = e.execForeach(step, depth)
+			sr := e.executeForeach(step, depth, wfResult)
+			output = sr.Output
+			children = sr.Children
+			if sr.Status == "failed" {
+				err = fmt.Errorf("%s", sr.Error)
+			}
 	default:
 		err = fmt.Errorf("unknown action: %s", step.Action)
 	}

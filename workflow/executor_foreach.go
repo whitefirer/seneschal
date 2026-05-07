@@ -109,7 +109,7 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 					   node.Step.Action == "foreach" || node.Step.Action == "loop" {
 						stepResult = e.executeContainerDAG(node.Step, depth+1, result)
 					} else {
-						stepResult = e.executeStep(node.Step, depth+1)
+						stepResult = e.executeStep(node.Step, depth+1, result)
 					}
 					
 					resultsMutex.Lock()
@@ -333,7 +333,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				   node.Step.Action == "foreach" || node.Step.Action == "loop" {
 					stepResult = e.executeContainerDAG(node.Step, depth+1, result)
 				} else {
-					stepResult = e.executeStep(node.Step, depth+1)
+					stepResult = e.executeStep(node.Step, depth+1, result)
 				}
 				
 				resultsMutex.Lock()
@@ -479,103 +479,4 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	return containerResult
 }
 
-func (e *Executor) execForeach(step Step, depth int) (string, []StepResult, error) {
-	// Resolve items
-	var items []string
-
-	switch v := step.Items.(type) {
-	case string:
-		// Reference to a variable
-		value := e.context.Get(v)
-		if value != "" {
-			items = strings.Split(value, "\n")
-			// Trim empty items
-			var filtered []string
-			for _, item := range items {
-				if strings.TrimSpace(item) != "" {
-					filtered = append(filtered, strings.TrimSpace(item))
-				}
-			}
-			items = filtered
-		}
-	case []interface{}:
-		for _, item := range v {
-			items = append(items, fmt.Sprintf("%v", item))
-		}
-	default:
-		// Try to handle []string from YAML
-		if strSlice, ok := v.([]string); ok {
-			items = strSlice
-		}
-	}
-
-	itemVar := step.ItemVar
-	if itemVar == "" {
-		itemVar = "item"
-	}
-
-	// Generate ID if not present
-	stepID := step.ID
-	if stepID == "" {
-		stepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(step.Name, " ", "-")))
-	}
-
-	// Print foreach with pretty output
-	if e.printer != nil {
-		e.printer.PrintForeach(len(items), itemVar)
-	}
-
-	var outputs []string
-	var children []StepResult
-	successCount := 0
-	failedCount := 0
-	
-	for i, item := range items {
-		e.context.Set(itemVar, item)
-		e.context.Set(itemVar+"_index", fmt.Sprintf("%d", i))
-
-		for j, s := range step.Do {
-			// Generate unique ID for each iteration
-			childID := s.ID
-			if childID == "" {
-				if s.Name != "" {
-					childID = fmt.Sprintf("step-%s-iter-%d", strings.ToLower(strings.ReplaceAll(s.Name, " ", "-")), i)
-				} else {
-					childID = fmt.Sprintf("%s-item-%d-step-%d", stepID, i, j)
-				}
-			} else {
-				// Append iteration index to existing ID
-				childID = fmt.Sprintf("%s-iter-%d", childID, i)
-			}
-			
-			// Note: step_start, step_output, step_complete are all sent by executeStep()
-			// Don't send again to avoid duplicate output
-			
-			sr := e.executeStep(s, depth+1)
-			
-			// Override the ID with the unique iteration ID
-			sr.ID = childID
-			
-			if sr.Output != "" {
-				outputs = append(outputs, sr.Output)
-			}
-			children = append(children, sr)
-			if sr.Status == "success" {
-				successCount++
-			} else if sr.Status == "failed" {
-				failedCount++
-			}
-			if sr.Status == "failed" && !s.ContinueOnError {
-				return strings.Join(outputs, "\n"), children, fmt.Errorf("foreach iteration %d step '%s' failed: %s", i, s.Name, sr.Error)
-			}
-		}
-	}
-
-	// Add summary output for foreach
-	summaryOutput := fmt.Sprintf("循环完成: %d次迭代, %d成功, %d失败", len(items), successCount, failedCount)
-	if len(outputs) > 0 {
-		return summaryOutput + "\n" + strings.Join(outputs, "\n"), children, nil
-	}
-	return summaryOutput, children, nil
-}
 

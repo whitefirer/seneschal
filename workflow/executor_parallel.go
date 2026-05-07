@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-func (e *Executor) execParallel(step Step, depth int) (string, []StepResult, error) {
+func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult) (string, []StepResult, error) {
 	// Print parallel with pretty output
 	if e.printer != nil {
 		e.printer.PrintParallel(len(step.Steps))
@@ -47,23 +47,23 @@ func (e *Executor) execParallel(step Step, depth int) (string, []StepResult, err
 			// Note: step_start, step_output, step_complete are all sent by executeStep()
 			// Don't send again to avoid duplicate output
 			
-			result := e.executeStep(s, depth+1)
+			childResult := e.executeStep(s, depth+1, result)
 			
 			mu.Lock()
 			defer mu.Unlock()
-			if result.Output != "" {
-				outputs = append(outputs, fmt.Sprintf("[%s] %s", s.Name, result.Output))
+			if childResult.Output != "" {
+				outputs = append(outputs, fmt.Sprintf("[%s] %s", s.Name, childResult.Output))
 			}
-			if result.Status == "success" {
+			if childResult.Status == "success" {
 				successCount++
-			} else if result.Status == "failed" {
+			} else if childResult.Status == "failed" {
 				failedCount++
 				hasError = true
 				if firstErr == nil {
-					firstErr = fmt.Errorf("parallel step '%s' failed: %s", s.Name, result.Error)
+					firstErr = fmt.Errorf("parallel step '%s' failed: %s", s.Name, childResult.Error)
 				}
 			}
-			children = append(children, result)
+			children = append(children, childResult)
 		}(s, childID)
 	}
 

@@ -38,7 +38,7 @@ func createSkippedStepResult(s Step) StepResult {
 	return sr
 }
 
-func (e *Executor) execCondition(step Step, depth int) (string, []StepResult, []StepResult, bool, error) {
+func (e *Executor) execCondition(step Step, depth int, result *WorkflowResult) (string, []StepResult, []StepResult, bool, error) {
 	expr, err := e.context.ResolveTemplate(step.Expression)
 	if err != nil {
 		return "", nil, nil, false, fmt.Errorf("resolve expression: %w", err)
@@ -48,20 +48,20 @@ func (e *Executor) execCondition(step Step, depth int) (string, []StepResult, []
 	// Supports: variable comparisons, string contains, empty checks
 	// Syntax: "{{.var}} == value", "{{.var}} != value", "{{.var}} contains value"
 	// Also supports: "var1 == var2" (resolves both sides)
-	result, err := e.evaluateExpression(expr)
+	evalResult, err := e.evaluateExpression(expr)
 	if err != nil {
 		return "", nil, nil, false, fmt.Errorf("evaluate condition: %w", err)
 	}
 
 	// Print condition with pretty output
 	if e.printer != nil {
-		e.printer.PrintCondition(expr, result)
+		e.printer.PrintCondition(expr, evalResult)
 	}
 
 	// Determine which branch to execute
 	var execSteps []Step
 	var skippedSteps []Step
-	if result {
+	if evalResult {
 		execSteps = step.Then
 		skippedSteps = step.Else
 	} else {
@@ -73,13 +73,13 @@ func (e *Executor) execCondition(step Step, depth int) (string, []StepResult, []
 	var outputs []string
 	var execChildren []StepResult
 	for _, s := range execSteps {
-		sr := e.executeStep(s, depth+1)
+		sr := e.executeStep(s, depth+1, result)
 		if sr.Output != "" {
 			outputs = append(outputs, sr.Output)
 		}
 		execChildren = append(execChildren, sr)
 		if sr.Status == "failed" && !s.ContinueOnError {
-			return strings.Join(outputs, "\n"), execChildren, nil, result, fmt.Errorf("sub-step '%s' failed: %s", s.Name, sr.Error)
+			return strings.Join(outputs, "\n"), execChildren, nil, evalResult, fmt.Errorf("sub-step '%s' failed: %s", s.Name, sr.Error)
 		}
 	}
 
@@ -90,7 +90,7 @@ func (e *Executor) execCondition(step Step, depth int) (string, []StepResult, []
 		skippedChildren = append(skippedChildren, createSkippedStepResult(s))
 	}
 
-	return strings.Join(outputs, "\n"), execChildren, skippedChildren, result, nil
+	return strings.Join(outputs, "\n"), execChildren, skippedChildren, evalResult, nil
 }
 
 func (e *Executor) evaluateExpression(expr string) (bool, error) {
