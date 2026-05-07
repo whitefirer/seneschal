@@ -84,8 +84,8 @@ type StepResult struct {
 	Output      string        `json:"output,omitempty"`
 	Error       string        `json:"error,omitempty"`
 	Duration    string        `json:"duration,omitempty"`
-	StartTime   string        `json:"start_time,omitempty"`
-	EndTime     string        `json:"end_time,omitempty"`
+	StartTime   string        `json:"startTime,omitempty"`
+	EndTime     string        `json:"endTime,omitempty"`
 	Children    []StepResult  `json:"children,omitempty"`
 	// DAG fields
 	Next       []string `json:"next,omitempty"`       // 下一节点列表（DAG模式）
@@ -114,6 +114,6 @@ type WorkflowResult struct {
 	Steps     []StepResult  `json:"steps"`
 	Variables map[string]string `json:"variables,omitempty"`
 	Error     string        `json:"error,omitempty"`
-	StartTime string        `json:"start_time,omitempty"`
-	EndTime   string        `json:"end_time,omitempty"`
+	StartTime string        `json:"startTime,omitempty"`
+	EndTime   string        `json:"endTime,omitempty"`
 }

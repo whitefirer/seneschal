@@ -2,6 +2,8 @@ package api
 
 import (
 	"time"
+
+	"goworkflow/workflow"
 )
 
 // API Response types
@@ -50,8 +52,8 @@ type ExecutionRecord struct {
 type ExecutionDetail struct {
 	ExecutionRecord
 	Logs     []LogEntry   `json:"logs"`
-	Steps    []StepResult `json:"steps"`
-	Workflow string       `json:"workflow"`
+	Steps    []workflow.StepResult `json:"steps"`
+	Workflow string                `json:"workflow"`
 }
 
 type LogEntry struct {
@@ -60,38 +62,6 @@ type LogEntry struct {
 	Message   string `json:"message"`
 	Step      string `json:"step,omitempty"`
 	StepID    string `json:"step_id,omitempty"`
-}
-
-type StepResult struct {
-	ID          string       `json:"id,omitempty"`
-	Name        string       `json:"name"`
-	Description string       `json:"description,omitempty"`
-	Action      string       `json:"action,omitempty"`
-	Status      string       `json:"status"`
-	StartTime   string       `json:"startTime"`
-	EndTime     string       `json:"endTime"`
-	Output      string       `json:"output,omitempty"`
-	Error       string       `json:"error,omitempty"`
-	Duration    string       `json:"duration,omitempty"`
-	Children    []StepResult `json:"children,omitempty"`
-	// DAG fields
-	Next      []string `json:"next,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
-	JoinMode  string   `json:"join_mode,omitempty"`
-	// Condition fields
-	Expression      string       `json:"expression,omitempty"`        // 条件表达式
-	ThenChildren    []StepResult `json:"then_children,omitempty"`    // then 分支子步骤
-	ElseChildren    []StepResult `json:"else_children,omitempty"`    // else 分支子步骤
-	ConditionResult *bool        `json:"condition_result,omitempty"` // 条件求值结果（使用指针以支持 false 值）
-	// Sleep fields
-	SleepDuration string `json:"sleepDuration,omitempty"` // Sleep 休眠时长
-	// Shell fields
-	ShellCommand string `json:"shellCommand,omitempty"` // Shell 命令
-	// HTTP fields
-	HTTPUrl    string `json:"httpUrl,omitempty"`    // HTTP URL
-	HTTPMethod string `json:"httpMethod,omitempty"` // HTTP Method
-	// Log fields
-	LogMessage string `json:"logMessage,omitempty"` // Log 消息
 }
 
 // WebSocket message types

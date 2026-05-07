@@ -312,8 +312,8 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Create execution record with pre-populated steps (including nested children)
 	
 	// Helper function to update step status recursively
-	var updateStepStatus func(steps []StepResult, stepID string, event workflow.ProgressEvent) bool
-	updateStepStatus = func(steps []StepResult, stepID string, event workflow.ProgressEvent) bool {
+	var updateStepStatus func(steps []workflow.StepResult, stepID string, event workflow.ProgressEvent) bool
+	updateStepStatus = func(steps []workflow.StepResult, stepID string, event workflow.ProgressEvent) bool {
 		for i := range steps {
 			// 先检查当前节点是否匹配（父节点优先）
 			if steps[i].ID == stepID || steps[i].Name == event.Name {
@@ -367,7 +367,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 						hasTemplate := len(steps[i].Children) == 1 && 
 							strings.HasSuffix(steps[i].Children[0].ID, "-template")
 						
-						newChild := StepResult{
+						newChild := workflow.StepResult{
 							ID:        stepID,
 							Name:      event.Name,
 							Action:    event.Action,
@@ -377,7 +377,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 						
 						if hasTemplate {
 							// Replace template with first iteration
-							steps[i].Children = []StepResult{newChild}
+							steps[i].Children = []workflow.StepResult{newChild}
 						} else {
 							// Append subsequent iterations
 							steps[i].Children = append(steps[i].Children, newChild)
@@ -411,9 +411,9 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		return false
 	}
 	
-	var buildSteps func(steps []workflow.Step, parentId string) []StepResult
-	buildSteps = func(steps []workflow.Step, parentId string) []StepResult {
-		result := make([]StepResult, 0, len(steps))
+	var buildSteps func(steps []workflow.Step, parentId string) []workflow.StepResult
+	buildSteps = func(steps []workflow.Step, parentId string) []workflow.StepResult {
+		result := make([]workflow.StepResult, 0, len(steps))
 		for i, s := range steps {
 			// Generate ID if not present
 			stepID := s.ID
@@ -425,7 +425,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			
-			step := StepResult{
+			step := workflow.StepResult{
 				ID:          stepID,
 				Name:        s.Name,
 				Description: s.Description,
@@ -651,45 +651,11 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			e.EndTime = result.EndTime
 			e.Error = result.Error
 
-			// Convert workflow.StepResult to api.StepResult
-			var convertSteps func([]workflow.StepResult) []StepResult
-			convertSteps = func(steps []workflow.StepResult) []StepResult {
-				result := make([]StepResult, len(steps))
-				for i, s := range steps {
-					result[i] = StepResult{
-						ID:              s.ID,
-						Name:            s.Name,
-						Description:     s.Description,
-						Action:          s.Action,
-						Status:          s.Status,
-						StartTime:       s.StartTime,
-						EndTime:         s.EndTime,
-						Output:          s.Output,
-						Error:           s.Error,
-						Duration:        s.Duration,
-						Children:        convertSteps(s.Children),
-						Next:            s.Next,
-						DependsOn:       s.DependsOn,
-						JoinMode:        s.JoinMode,
-						Expression:      s.Expression,
-						ConditionResult: s.ConditionResult,
-						ThenChildren:    convertSteps(s.ThenChildren),
-						ElseChildren:    convertSteps(s.ElseChildren),
-						SleepDuration:   s.SleepDuration,
-						ShellCommand:    s.ShellCommand,
-						HTTPUrl:         s.HTTPUrl,
-						HTTPMethod:      s.HTTPMethod,
-						LogMessage:      s.LogMessage,
-					}
-				}
-				return result
-			}
-			
-			apiSteps := convertSteps(result.Steps)
+			apiSteps := result.Steps
 
 			// Update steps with results (preserve action from pre-populated steps)
-			var updateStep func(existing *StepResult, result StepResult, wfSteps []workflow.Step)
-			updateStep = func(ex *StepResult, sr StepResult, wfSteps []workflow.Step) {
+			var updateStep func(existing *workflow.StepResult, result workflow.StepResult, wfSteps []workflow.Step)
+			updateStep = func(ex *workflow.StepResult, sr workflow.StepResult, wfSteps []workflow.Step) {
 				// Store original ID for lookup before overwriting
 				lookupKey := ex.ID
 				if lookupKey == "" {
@@ -750,7 +716,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					}
 					
 					if len(allowedNames) > 0 {
-						filteredChildren := make([]StepResult, 0, len(sr.Children))
+						filteredChildren := make([]workflow.StepResult, 0, len(sr.Children))
 						for _, child := range sr.Children {
 							if allowedNames[child.Name] {
 								filteredChildren = append(filteredChildren, child)
@@ -783,9 +749,9 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			}
 			
 			// Build a map of all results for quick lookup
-			resultMap := make(map[string]StepResult)
-			var buildResultMap func(steps []StepResult)
-			buildResultMap = func(steps []StepResult) {
+			resultMap := make(map[string]workflow.StepResult)
+			var buildResultMap func(steps []workflow.StepResult)
+			buildResultMap = func(steps []workflow.StepResult) {
 				for _, sr := range steps {
 					key := sr.ID
 					if key == "" {
@@ -810,8 +776,8 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			buildResultMap(apiSteps)
 			
 			// Now recursively update existing tree using the result map
-			var updateTree func(existing []StepResult, wfSteps []workflow.Step)
-			updateTree = func(existing []StepResult, wfSteps []workflow.Step) {
+			var updateTree func(existing []workflow.StepResult, wfSteps []workflow.Step)
+			updateTree = func(existing []workflow.StepResult, wfSteps []workflow.Step) {
 				for i := range existing {
 					ex := &existing[i]
 					key := ex.ID
