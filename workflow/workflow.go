@@ -95,7 +95,7 @@ type StepResult struct {
 	Expression      string       `json:"expression,omitempty"`        // 条件表达式
 	ThenChildren    []StepResult `json:"then_children,omitempty"`    // then 分支子步骤
 	ElseChildren    []StepResult `json:"else_children,omitempty"`    // else 分支子步骤
-	ConditionResult *bool        `json:"condition_result,omitempty"` // 条件求值结果（使用指针以支持 false 值）
+	ConditionResult *bool        `json:"condition_result"` // 条件求值结果（使用指针以支持 false 值）
 	// Sleep fields
 	SleepDuration string `json:"sleepDuration,omitempty"` // Sleep 休眠时长
 	// Shell fields

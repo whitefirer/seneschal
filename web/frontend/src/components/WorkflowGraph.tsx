@@ -427,13 +427,22 @@ function layoutBranch(
 }
 */
 
-// 计算布局 - 改进版，支持 foreach/parallel 容器，递归处理 condition 嵌套
-// DAG 布局：按层级排列节点
-// 计算 DAG 布局
-// isParallelContainer: 是否为并行容器的直接子节点（并行子节点之间不搞隐式依赖）
-function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, isParallelContainer: boolean = false): FlatFlowStep[] {
-  // 构建节点 ID 到步骤的映射
-  // 建立 ID 和 Name 的双重映射，兼容后端数据（next/depends_on 存的是 name）
+// ===== 统一的 DAG 依赖图构建 =====
+// 所有依赖关系（显式 next/depends_on + 隐式顺序）都走同一张依赖图
+// edgeReasons 标记每条边来源：'next' | 'depends_on' | 'implicit'
+
+type EdgeReason = 'next' | 'depends_on' | 'implicit'
+
+interface DepGraph {
+  predecessors: Map<string, Set<string>>
+  successors: Map<string, Set<string>>
+  stepMap: Map<string, FlowStep>
+  nameToIdMap: Map<string, string>
+  edgeReasons: Map<string, EdgeReason>  // key: "sourceId->targetId"
+  resolveRef: (ref: string) => string | null
+}
+
+function buildDepGraph(steps: FlowStep[], isParallelContainer: boolean = false): DepGraph {
   const stepMap = new Map<string, FlowStep>()
   const nameToIdMap = new Map<string, string>()
   steps.forEach(s => {
@@ -448,143 +457,97 @@ function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, i
     return null
   }
 
-  // 构建依赖图：记录每个节点的前驱和后继
   const predecessors = new Map<string, Set<string>>()
   const successors = new Map<string, Set<string>>()
-  let explicitEdgeCount = 0
-
+  const edgeReasons = new Map<string, EdgeReason>()
   steps.forEach(s => {
     predecessors.set(s.id, new Set())
     successors.set(s.id, new Set())
   })
 
-  // 1. 处理 depends_on (反向依赖)
+  const addEdge = (from: string, to: string, reason: EdgeReason) => {
+    successors.get(from)?.add(to)
+    predecessors.get(to)?.add(from)
+    const key = `${from}->${to}`
+    // 显式声明优先级高于隐式
+    if (!edgeReasons.has(key) || reason !== 'implicit') {
+      edgeReasons.set(key, reason)
+    }
+  }
+
+  // 1. depends_on
   steps.forEach(s => {
     if (s.depends_on && s.depends_on.length > 0) {
       s.depends_on.forEach(depId => {
         const targetId = resolveRef(depId)
-        if (targetId) {
-          successors.get(targetId)?.add(s.id)
-          predecessors.get(s.id)?.add(targetId)
-          explicitEdgeCount++
-        } else {
-          console.warn(`[DAGLayout] Step '${s.id}' depends_on '${depId}', but target not found!`)
-        }
+        if (targetId) addEdge(targetId, s.id, 'depends_on')
       })
     }
   })
 
-  // 2. 处理 next (正向依赖)
+  // 2. next
   steps.forEach(s => {
     if (s.next && s.next.length > 0) {
       s.next.forEach(nextId => {
         const targetId = resolveRef(nextId)
-        if (targetId) {
-          successors.get(s.id)?.add(targetId)
-          predecessors.get(targetId)?.add(s.id)
-          explicitEdgeCount++
-        } else {
-          console.warn(`[DAGLayout] Step '${s.id}' next is '${nextId}', but target not found!`)
-        }
+        if (targetId) addEdge(s.id, targetId, 'next')
       })
     }
   })
 
-
-  // 3. 隐式依赖回退 (仅限非并行容器)
-  // 修改策略：不再依赖全局 explicitEdgeCount，而是为每个无 depends_on 的节点（且非首个）添加前驱依赖
-  // 这保证了线性流程（包括 Condition 后、Parallel 后）的节点不会重叠
+  // 3. 隐式顺序依赖（无显式依赖且非首个时，依赖前一个兄弟）
   if (!isParallelContainer && steps.length > 1) {
     for (let i = 1; i < steps.length; i++) {
       const curr = steps[i]
       const prev = steps[i - 1]
-      // 如果当前节点没有显式依赖，且不是并行容器子节点，则依赖前一个节点
       if (!curr.depends_on || curr.depends_on.length === 0) {
-        successors.get(prev.id)?.add(curr.id)
-        predecessors.get(curr.id)?.add(prev.id)
+        const key = `${prev.id}->${curr.id}`
+        if (!edgeReasons.has(key)) {
+          addEdge(prev.id, curr.id, 'implicit')
+        }
       }
     }
   }
 
-  // 计算层级：使用拓扑排序 (BFS)
+  return { predecessors, successors, stepMap, nameToIdMap, edgeReasons, resolveRef }
+}
+
+// 基于依赖图计算层级和位置（只做布局，不做连线）
+function calculateDAGLayout(steps: FlowStep[], startX: number, startY: number, isParallelContainer: boolean = false): FlatFlowStep[] {
+  const { predecessors } = buildDepGraph(steps, isParallelContainer)
+
+  // DFS 计算层级（最长前驱路径长度）
   const levels = new Map<string, number>()
-  const inDegree = new Map<string, number>()
-  
-  // 计算入度
-  steps.forEach(s => {
-    inDegree.set(s.id, predecessors.get(s.id)?.size || 0)
-  })
-
-  // 初始队列：入度为 0 的节点
-  const queue: string[] = []
-  steps.forEach(s => {
-    if (inDegree.get(s.id) === 0) {
-      queue.push(s.id)
-    }
-  })
-
-  // BFS
-  while (queue.length > 0) {
-    // 注意：这里我们简单地使用队列长度来控制层级不太准确，应该记录层级
-    // 重新设计：BFS 时携带层级
-  }
-  
-  // 重新计算层级
-  const computeLevel = (nodeId: string, visited: Set<string>): number => {
+  const computeLevel = (nodeId: string): number => {
     if (levels.has(nodeId)) return levels.get(nodeId)!
-    
     const preds = predecessors.get(nodeId) || new Set()
-    if (preds.size === 0) {
-      levels.set(nodeId, 0)
-      return 0
-    }
-    
-    let maxPredLevel = -1
-    for (const predId of preds) {
-      const predLevel = computeLevel(predId, visited)
-      maxPredLevel = Math.max(maxPredLevel, predLevel)
-    }
-    
-    const currentLevel = maxPredLevel + 1
-    levels.set(nodeId, currentLevel)
-    return currentLevel
+    if (preds.size === 0) { levels.set(nodeId, 0); return 0 }
+    let maxPred = -1
+    for (const p of preds) maxPred = Math.max(maxPred, computeLevel(p))
+    const lvl = maxPred + 1
+    levels.set(nodeId, lvl)
+    return lvl
   }
+  steps.forEach(s => computeLevel(s.id))
 
-  const visited = new Set<string>()
-  steps.forEach(s => computeLevel(s.id, visited))
-
-
-  // 按层级分组
   const levelGroups = new Map<number, FlowStep[]>()
   steps.forEach(s => {
-    const level = levels.get(s.id) || 0
-    if (!levelGroups.has(level)) levelGroups.set(level, [])
-    levelGroups.get(level)?.push(s)
+    const lvl = levels.get(s.id) || 0
+    if (!levelGroups.has(lvl)) levelGroups.set(lvl, [])
+    levelGroups.get(lvl)?.push(s)
   })
 
-  // 生成节点位置
   const nodes: FlatFlowStep[] = []
-  const maxLevel = Math.max(...Array.from(levels.values()))
-
-  for (let level = 0; level <= maxLevel; level++) {
-    const group = levelGroups.get(level) || []
-    const levelX = startX + level * (NODE_WIDTH + H_SPACING)
-    const groupHeight = group.length * (NODE_HEIGHT + V_SPACING) - V_SPACING
-    // 垂直居中
-    const levelStartY = startY + (group.length > 1 ? -groupHeight / 2 + NODE_HEIGHT / 2 : 0)
-
+  const maxLevel = Math.max(...Array.from(levels.values()), 0)
+  for (let lvl = 0; lvl <= maxLevel; lvl++) {
+    const group = levelGroups.get(lvl) || []
+    const lx = startX + lvl * (NODE_WIDTH + H_SPACING)
+    const gh = group.length * (NODE_HEIGHT + V_SPACING) - V_SPACING
+    const ly = startY + (group.length > 1 ? -gh / 2 + NODE_HEIGHT / 2 : 0)
     group.forEach((step, idx) => {
-      nodes.push({
-        ...step,
-        parentId: undefined,
-        position: {
-          x: levelX,
-          y: levelStartY + idx * (NODE_HEIGHT + V_SPACING)
-        }
-      })
+      nodes.push({ ...step, parentId: undefined, position: { x: lx, y: ly + idx * (NODE_HEIGHT + V_SPACING) } })
     })
   }
-
   return nodes
 }
 
@@ -782,985 +745,206 @@ function calculateLayout(
   }
 }
 
-// 递归构建 condition 分支连线（支持任意层级嵌套）
-function buildBranchEdges(
-  children: FlowStep[],
-  parentId: string,
-  branchType: 'then' | 'else',
-  branchExecuted: boolean,
-  isDark: boolean,
-  edges: any[]
-): void {
-  for (let i = 0; i < children.length; i++) {
-    const child = children[i]
-    const childId = child.id || `${parentId}-${branchType}-${i}`
-    const isCollapsed = child.collapsed
-    
-    // 链式连线（到下一个兄弟节点）- 所有分支都水平连线
-    if (i < children.length - 1) {
-      const nextChild = children[i + 1]
-      const nextChildId = nextChild.id || `${parentId}-${branchType}-${i + 1}`
-      edges.push({
-        id: `edge-${childId}-${nextChildId}`,
-        source: childId,
-        sourceHandle: 'right',
-        target: nextChildId,
-        targetHandle: 'left',
-        type: 'default',
-        style: { 
-          stroke: branchExecuted ? '#22c55e' : '#d1d5db', 
-          strokeWidth: 2,
-          strokeDasharray: branchExecuted ? undefined : '4,4'
-        },
-        markerEnd: { type: MarkerType.ArrowClosed, color: branchExecuted ? '#22c55e' : '#d1d5db' },
-      })
-    }
-    
-    // 如果是 condition 且未折叠，递归处理其子节点连线
-    if (child.action === 'condition' && !isCollapsed) {
-      const nestedThenChildrenRaw = child.then_children || child.then || []
-      const nestedElseChildrenRaw = child.else_children || child.else || []
-      
-      if (nestedThenChildrenRaw.length > 0 || nestedElseChildrenRaw.length > 0) {
-        const nestedConditionResult = child.condition_result
-        const nestedThenExecuted = nestedConditionResult === true
-        const nestedElseExecuted = nestedConditionResult === false
-        
-        // 根据嵌套 condition 的折叠状态过滤子节点
-        const nestedIsCollapsed = child.collapsed
-        const nestedThenChildren = nestedIsCollapsed ? (nestedThenExecuted ? nestedThenChildrenRaw : []) : nestedThenChildrenRaw
-        const nestedElseChildren = nestedIsCollapsed ? (nestedElseExecuted ? nestedElseChildrenRaw : []) : nestedElseChildrenRaw
-        
-        // condition → 第一个 then 子节点
-        if (nestedThenChildren.length > 0) {
-          const firstNestedThen = nestedThenChildren[0]
-          const firstNestedThenId = firstNestedThen.id || `${childId}-then-0`
-          edges.push({
-            id: `edge-${childId}-${firstNestedThenId}`,
-            source: childId,
-            sourceHandle: 'right',
-            target: firstNestedThenId,
-            targetHandle: 'left',
-            type: 'default',
-            style: { 
-              stroke: nestedThenExecuted ? '#22c55e' : '#d1d5db', 
-              strokeWidth: 2,
-              strokeDasharray: nestedThenExecuted ? undefined : '4,4'
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, color: nestedThenExecuted ? '#22c55e' : '#d1d5db' },
-            label: 'true',
-            labelStyle: { fill: nestedThenExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
-            labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-          })
-          
-          // 递归处理 then 分支连线
-          buildBranchEdges(nestedThenChildren, childId, 'then', nestedThenExecuted, isDark, edges)
-        }
-        
-        // condition → 第一个 else 子节点
-        if (nestedElseChildren.length > 0) {
-          const firstNestedElse = nestedElseChildren[0]
-          const firstNestedElseId = firstNestedElse.id || `${childId}-else-0`
-          edges.push({
-            id: `edge-${childId}-${firstNestedElseId}`,
-            source: childId,
-            sourceHandle: 'bottom',
-            target: firstNestedElseId,
-            targetHandle: 'left',
-            type: 'default',
-            style: { 
-              stroke: nestedElseExecuted ? '#22c55e' : '#d1d5db', 
-              strokeWidth: 2,
-              strokeDasharray: nestedElseExecuted ? undefined : '4,4'
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, color: nestedElseExecuted ? '#22c55e' : '#d1d5db' },
-            label: 'false',
-            labelStyle: { fill: nestedElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
-            labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-          })
-          
-          // 递归处理 else 分支连线
-          buildBranchEdges(nestedElseChildren, childId, 'else', nestedElseExecuted, isDark, edges)
-        }
-      }
-    }
-  }
-}
 
-// 构建连线
+// 构建连线（基于统一的 DAG 依赖图）
 function buildEdges(steps: FlowStep[], isDark: boolean): any[] {
   const edges: any[] = []
-  
-  // 建立 ID 和 Name 的双重映射，兼容后端数据
-  const stepMap = new Map<string, FlowStep>()
-  const nameToIdMap = new Map<string, string>()
-  steps.forEach(s => {
-    stepMap.set(s.id, s)
-    if (s.name) nameToIdMap.set(s.name, s.id)
-  })
-  const resolveRef = (ref: string): string => {
-    if (stepMap.has(ref)) return ref
-    if (nameToIdMap.has(ref)) return nameToIdMap.get(ref)!
-    if (stepMap.has(`step-${ref}`)) return `step-${ref}`
-    return ref // fallback to original
+  const edgeIdSet = new Set<string>()
+  const addEdge = (edge: any) => {
+    if (!edgeIdSet.has(edge.id)) { edgeIdSet.add(edge.id); edges.push(edge) }
   }
 
-  // 检测是否是 DAG 模式
-  const isDAG = steps.some(s => s.next && s.next.length > 0)
+  const processLevel = (stepList: FlowStep[], isParallelContainer = false) => {
+    if (stepList.length === 0) return
+    const dg = buildDepGraph(stepList, isParallelContainer)
 
-  if (isDAG) {
-    for (const step of steps) {
-      if (step.next && step.next.length > 0) {
-        for (const nextRef of step.next) {
-          const targetId = resolveRef(nextRef)
-          edges.push({
-            id: `edge-${step.id}-${targetId}`,
-            source: step.id,
-            target: targetId,
-            type: 'default',
-            style: { stroke: '#9ca3af', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-          })
-        }
+    // 1. 从依赖图 successors 生成水平 DAG 边
+    // condition 有子分支时不画直连出口边，由下方容器处理画分支出口
+    for (const [srcId, targets] of dg.successors) {
+      const srcStep = dg.stepMap.get(srcId)
+      const isConditionWithBranches = srcStep?.action === 'condition' &&
+        ((srcStep.then_children || srcStep.then)?.length || (srcStep.else_children || srcStep.else)?.length)
+      if (isConditionWithBranches) continue // 出口由分支子节点处理
+      for (const tgtId of targets) {
+        const reason = dg.edgeReasons.get(`${srcId}->${tgtId}`)
+        const isExplicit = reason === 'next' || reason === 'depends_on'
+        const target = dg.stepMap.get(tgtId)
+        addEdge({
+          id: `edge-${srcId}-${tgtId}`,
+          source: srcId, sourceHandle: 'right',
+          target: tgtId, targetHandle: 'left',
+          type: 'default',
+          animated: target?.status === 'running',
+          style: { stroke: isExplicit ? '#3b82f6' : '#9ca3af', strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: isExplicit ? '#3b82f6' : '#9ca3af' },
+        })
       }
     }
-    return edges
-  }
 
-  // 线性模式：原有逻辑
-  const connectSteps = (stepList: FlowStep[], parent?: FlowStep) => {
-    for (let i = 0; i < stepList.length; i++) {
-      const current = stepList[i]
-      const next = stepList[i + 1]
-      const isCollapsed = current.collapsed
+    // 2. 容器节点的垂直（父子）边
+    for (const step of stepList) {
+      const collapsed = step.collapsed
 
-      // Parallel: 扇出扇入连线
-      if (current.action === 'parallel' && current.children?.length) {
-        // 父节点连接到当前 parallel 节点（如果有父节点且是第一个子节点）
-        if (parent && i === 0) {
-          edges.push({
-            id: `edge-${parent.id}-${current.id}`,
-            source: parent.id,
-            target: current.id,
-            type: 'default',
-            style: { stroke: '#9ca3af', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-          })
-        }
-        
-        if (!isCollapsed) {
-          // 展开：扇出扇入
-          // 扇出：父节点 → 所有子节点（根据子节点状态决定是否流动）
-          for (let j = 0; j < current.children.length; j++) {
-            const child = current.children[j]
-            const isRunning = child.status === 'running'
-            
-            edges.push({
-              id: `edge-${current.id}-${child.id}`,
-              source: current.id,
-              sourceHandle: 'bottom',
-              target: child.id,
-              targetHandle: 'top',
-              type: 'hollow',
-              animated: isRunning,
-              style: { stroke: '#a855f7' },  // 紫色
+      // --- parallel ---
+      if (step.action === 'parallel' && step.children?.length) {
+        if (collapsed) {
+          const n = Math.min(2, step.children.length)
+          for (let j = 0; j < n; j++) {
+            const c = step.children[j]
+            addEdge({
+              id: `edge-${step.id}-${c.id}-collapsed`,
+              source: step.id, sourceHandle: 'bottom',
+              target: c.id, targetHandle: 'top',
+              type: 'hollow', animated: c.status === 'running',
+              style: { stroke: '#a855f7', strokeDasharray: '4 4' },
             })
-          }
-          // 扇入：所有子节点 → 下一节点（根据下一节点状态决定是否流动）
-          if (next) {
-            const nextIsRunning = next.status === 'running'
-            
-            for (let j = 0; j < current.children.length; j++) {
-              edges.push({
-                id: `edge-${current.children[j].id}-${next.id}`,
-                source: current.children[j].id,
-                sourceHandle: Position.Right,  // 从右侧发出
-                target: next.id,
-                type: 'default',  // 普通线
-                animated: nextIsRunning,
-                style: { stroke: '#9ca3af', strokeWidth: 2 },
-                markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-              })
-            }
           }
         } else {
-          // 折叠时：智能分组显示（前 2 个子节点 + 省略标记）
-          const displayCount = Math.min(2, current.children.length)
-          
-          // 显示前 N 个子节点
-          for (let j = 0; j < displayCount; j++) {
-            const child = current.children[j]
-            const isRunning = child.status === 'running'
-            
-            // 父节点 → 子节点
-            edges.push({
-              id: `edge-${current.id}-${child.id}-collapsed`,
-              source: current.id,
-              sourceHandle: 'bottom',
-              target: child.id,
-              targetHandle: 'top',
-              type: 'hollow',
-              animated: isRunning,
-              style: { stroke: '#a855f7', strokeDasharray: '4 4' },  // 虚线表示折叠
-            })
-            
-            // 子节点 → 下一节点
-            if (next) {
-              const nextIsRunning = next.status === 'running'
-              
-              edges.push({
-                id: `edge-${child.id}-${next.id}-collapsed`,
-                source: child.id,
-                sourceHandle: Position.Right,
-                target: next.id,
-                type: 'default',
-                animated: nextIsRunning,
-                style: { stroke: '#9ca3af', strokeWidth: 2, strokeDasharray: '4 4' },
-                markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-              })
-            }
-          }
-          
-          // 如果有省略的子节点，添加省略标记连线
-          if (current.children.length > displayCount && next) {
-            edges.push({
-              id: `edge-${current.id}-${next.id}-omitted`,
-              source: current.id,
-              sourceHandle: 'right',
-              target: next.id,
-              type: 'default',
-              label: '······',  // 省略标记
-              labelStyle: { fill: '#9ca3af', fontWeight: 500, fontSize: '12px' },
-              style: { stroke: '#9ca3af', strokeWidth: 2, strokeDasharray: '4 4' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-            })
-          } else if (next) {
-            // 没有省略，直接连接
-            const nextIsRunning = next.status === 'running'
-            
-            edges.push({
-              id: `edge-${current.id}-${next.id}`,
-              source: current.id,
-              sourceHandle: 'right',
-              target: next.id,
-              type: 'default',
-              animated: nextIsRunning,
-              style: { stroke: '#9ca3af', strokeWidth: 2 },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
+          for (const c of step.children) {
+            addEdge({
+              id: `edge-${step.id}-${c.id}`,
+              source: step.id, sourceHandle: 'bottom',
+              target: c.id, targetHandle: 'top',
+              type: 'hollow', animated: c.status === 'running',
+              style: { stroke: '#a855f7' },
             })
           }
         }
-        continue
+        processLevel(step.children, true)
       }
-
-      // Foreach: 链式连接，最后子节点连接到下一个步骤
-      if ((current.action === 'foreach' || current.action === 'loop') && current.children?.length) {
-        // 父节点连接到当前 foreach 节点（如果有父节点且是第一个子节点）
-        if (parent && i === 0) {
-          edges.push({
-            id: `edge-${parent.id}-${current.id}`,
-            source: parent.id,
-            target: current.id,
-            type: 'default',
-            style: { stroke: '#9ca3af', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-          })
-        }
-        
-        if (!isCollapsed) {
-          // 过滤子节点，与布局保持一致
-          const { filtered, skippedIterations } = filterForeachChildren(current.children, current.items?.length)
-          
-          if (filtered.length === 0) continue
-          
-          // 展开时：父节点连接到第一个子节点（入口）
-          const firstChild = filtered[0]
-          edges.push({
-            id: `edge-${current.id}-${firstChild.id}`,
-            source: current.id,
-            sourceHandle: 'bottom',
-            target: firstChild.id,
-            targetHandle: 'top',
-            type: 'default',
-            style: { stroke: '#06b6d4', strokeWidth: 2, strokeDasharray: '4,4' },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#06b6d4' },
-          })
-          
-          // 子节点链式连接（顺序执行）
-          // 检测是否跨迭代，在跨迭代的连线上添加省略标记
-          for (let j = 0; j < filtered.length - 1; j++) {
-            const currentIter = extractIterationIndex(filtered[j].id)
-            const nextIter = extractIterationIndex(filtered[j + 1].id)
-            
-            const edge: Edge = {
-              id: `edge-${filtered[j].id}-${filtered[j + 1].id}`,
-              source: filtered[j].id,
-              sourceHandle: 'bottom',
-              target: filtered[j + 1].id,
-              targetHandle: 'top',
+      // --- foreach / loop ---
+      else if ((step.action === 'foreach' || step.action === 'loop') && step.children?.length) {
+        if (!collapsed) {
+          const { filtered, skippedIterations } = filterForeachChildren(step.children, step.items?.length)
+          if (filtered.length > 0) {
+            addEdge({
+              id: `edge-${step.id}-${filtered[0].id}`,
+              source: step.id, sourceHandle: 'bottom',
+              target: filtered[0].id, targetHandle: 'top',
               type: 'default',
               style: { stroke: '#06b6d4', strokeWidth: 2, strokeDasharray: '4,4' },
               markerEnd: { type: MarkerType.ArrowClosed, color: '#06b6d4' },
-            }
-            
-            // 如果跨迭代（当前迭代 != 下一个迭代），且有省略的迭代，添加省略标记
-            // 标记添加在第一次迭代结束后的第一条跨迭代连线
-            if (skippedIterations > 0 && currentIter !== null && nextIter !== null && currentIter !== nextIter) {
-              edge.label = '······'
-              edge.labelStyle = { fill: '#9ca3af', fontWeight: 'bold', fontSize: 12 }
-              edge.labelBgStyle = { fill: isDark ? '#1f2937' : '#ffffff', fillOpacity: 0.9 }
-              edge.labelBgPadding = [8, 4] as [number, number]
-              edge.labelBgBorderRadius = 4
-            }
-            
-            edges.push(edge)
-          }
-          
-          // 最后子节点连接到下一个步骤（出口）
-          if (next) {
-            const lastChild = filtered[filtered.length - 1]
-            edges.push({
-              id: `edge-${lastChild.id}-${next.id}`,
-              source: lastChild.id,
-              sourceHandle: Position.Right,
-              target: next.id,
-              type: 'default',
-              style: { stroke: '#9ca3af', strokeWidth: 2 },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
             })
-          }
-        } else {
-          // 折叠时：foreach 父节点直接连到下一个节点
-          if (next) {
-            edges.push({
-              id: `edge-${current.id}-${next.id}`,
-              source: current.id,
-              sourceHandle: 'right',
-              target: next.id,
-              targetHandle: 'left',
-              type: 'default',
-              style: { stroke: '#9ca3af', strokeWidth: 2 },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-            })
+            for (let j = 0; j < filtered.length - 1; j++) {
+              const ci = extractIterationIndex(filtered[j].id)
+              const ni = extractIterationIndex(filtered[j + 1].id)
+              const e: any = {
+                id: `edge-${filtered[j].id}-${filtered[j + 1].id}`,
+                source: filtered[j].id, sourceHandle: 'bottom',
+                target: filtered[j + 1].id, targetHandle: 'top',
+                type: 'default',
+                style: { stroke: '#06b6d4', strokeWidth: 2, strokeDasharray: '4,4' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: '#06b6d4' },
+              }
+              if (skippedIterations > 0 && ci !== null && ni !== null && ci !== ni) {
+                e.label = '......'
+                e.labelStyle = { fill: '#9ca3af', fontWeight: 'bold', fontSize: 12 }
+                e.labelBgStyle = { fill: isDark ? '#1f2937' : '#ffffff', fillOpacity: 0.9 }
+                e.labelBgPadding = [8, 4] as [number, number]
+                e.labelBgBorderRadius = 4
+              }
+              addEdge(e)
+            }
           }
         }
-        continue
+        processLevel(step.children, false)
       }
+      // --- condition ---
+      else if (step.action === 'condition') {
+        const thenC = step.then_children || step.then || []
+        const elseC = step.else_children || step.else || []
+        const cr = step.condition_result
+        const te = cr === true; const ee = cr === false
+        const vThen = collapsed ? (te ? thenC : []) : thenC
+        const vElse = collapsed ? (ee ? elseC : []) : elseC
 
-      // Condition: Y型分叉连线（从右侧连到左侧）
-      if (current.action === 'condition') {
-        // 兼容 then_children 和 then 属性
-        const thenChildren = current.then_children || current.then || []
-        const elseChildren = current.else_children || current.else || []
-        const conditionResult = current.condition_result
-        const isCollapsed = current.collapsed
-        
-        // 确定 condition 分支结束后的目标节点
-        // 优先使用显式指定的 next，否则使用 steps 中的下一节点
-        let branchTarget: FlowStep | undefined = next
-        if (current.next && current.next.length > 0) {
-          // 找到指定的目标节点
-          const targetId = current.next[0]
-          const targetStep = steps.find(s => s.id === targetId || s.name === targetId)
-          if (targetStep) {
-            branchTarget = targetStep
-          }
-        }
-
-        // 父节点连接到当前 condition 节点
-        if (parent && i === 0) {
-          edges.push({
-            id: `edge-${parent.id}-${current.id}`,
-            source: parent.id,
-            sourceHandle: 'right',
-            target: current.id,
-            targetHandle: 'left',
+        if (vThen.length > 0) {
+          addEdge({
+            id: `edge-${step.id}-${vThen[0].id || step.id + '-then-0'}`,
+            source: step.id, sourceHandle: 'right',
+            target: vThen[0].id || step.id + '-then-0', targetHandle: 'left',
             type: 'default',
-            style: { stroke: '#9ca3af', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-          })
-        }
-
-        // 折叠状态：显示执行分支的节点，隐藏未执行分支
-        // 展开状态：显示所有分支节点
-        const thenExecuted = conditionResult === true
-        const elseExecuted = conditionResult === false
-        
-        let visibleThenChildren = isCollapsed ? (thenExecuted ? thenChildren : []) : thenChildren
-        let visibleElseChildren = isCollapsed ? (elseExecuted ? elseChildren : []) : elseChildren
-
-        // 折叠时：如果有执行分支节点，连线到执行分支，而不是直接跳过
-        // 注意：布局函数 layoutCollapsedBranch 已经将执行分支节点放在同一水平线
-        
-        // then 分支连线（执行分支或展开状态）
-        if (visibleThenChildren.length > 0) {
-          const firstThen = visibleThenChildren[0]
-          // condition → then 子节点：label "true"
-          edges.push({
-            id: `edge-${current.id}-${firstThen.id || `${current.id}-then-0`}`,
-            source: current.id,
-            sourceHandle: 'right',
-            target: firstThen.id || `${current.id}-then-0`,
-            targetHandle: 'left',
-            type: 'default',
-            style: { 
-              stroke: thenExecuted ? '#22c55e' : '#d1d5db', 
-              strokeWidth: 2,
-              strokeDasharray: thenExecuted ? undefined : '4,4'
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, color: thenExecuted ? '#22c55e' : '#d1d5db' },
-            label: 'true',
-            labelStyle: { fill: thenExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
+            style: { stroke: te ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: te ? undefined : '4,4' },
+            markerEnd: { type: MarkerType.ArrowClosed, color: te ? '#22c55e' : '#d1d5db' },
+            label: `true(T:${te})`, labelStyle: { fill: te ? '#22c55e' : '#9ca3af', fontSize: 9, fontWeight: 'bold' },
             labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
           })
-          // then 子节点链式连接（水平排布）
-          for (let j = 0; j < visibleThenChildren.length - 1; j++) {
-            edges.push({
-              id: `edge-${visibleThenChildren[j].id || `${current.id}-then-${j}`}-${visibleThenChildren[j + 1].id || `${current.id}-then-${j + 1}`}`,
-              source: visibleThenChildren[j].id || `${current.id}-then-${j}`,
-              sourceHandle: 'right',
-              target: visibleThenChildren[j + 1].id || `${current.id}-then-${j + 1}`,
-              targetHandle: 'left',
+          for (let j = 0; j < vThen.length - 1; j++) {
+            addEdge({
+              id: `edge-${vThen[j].id}-${vThen[j + 1].id}`,
+              source: vThen[j].id, sourceHandle: 'right',
+              target: vThen[j + 1].id, targetHandle: 'left',
               type: 'default',
-              style: { stroke: thenExecuted ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: thenExecuted ? undefined : '4,4' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: thenExecuted ? '#22c55e' : '#d1d5db' },
+              style: { stroke: te ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: te ? undefined : '4,4' },
+              markerEnd: { type: MarkerType.ArrowClosed, color: te ? '#22c55e' : '#d1d5db' },
             })
           }
-          
-          // 递归处理 then 子节点内部的连线（使用递归函数处理任意层级嵌套）
-          for (const child of visibleThenChildren) {
-            // 父级折叠时，嵌套 condition 正常展开，不跟随父级折叠
-            // 所以这里不检查 child.collapsed
-            if (child.action === 'condition' && ((child.then_children || child.then)?.length || (child.else_children || child.else)?.length)) {
-              // 获取嵌套 condition 的执行结果
-              const nestedConditionResult = child.condition_result
-              const nestedThenExecuted = nestedConditionResult === true
-              const nestedElseExecuted = nestedConditionResult === false
-              
-              // 嵌套 condition 正常展开，不跟随父级折叠
-              // 只检查嵌套 condition 自身的折叠状态
-              const nestedThenChildrenRaw = child.then_children || child.then || []
-              const nestedElseChildrenRaw = child.else_children || child.else || []
-              // 嵌套 condition 的连线：只看其自身折叠状态，不看父级
-              const nestedThenChildren = child.collapsed ? (nestedThenExecuted ? nestedThenChildrenRaw : []) : nestedThenChildrenRaw
-              const nestedElseChildren = child.collapsed ? (nestedElseExecuted ? nestedElseChildrenRaw : []) : nestedElseChildrenRaw
-              
-              // condition → 第一个 then 子节点
-              if (nestedThenChildren.length > 0) {
-                const firstNestedThen = nestedThenChildren[0]
-                const firstNestedThenId = firstNestedThen.id || `${child.id}-then-0`
-                edges.push({
-                  id: `edge-${child.id}-${firstNestedThenId}`,
-                  source: child.id,
-                  sourceHandle: 'right',
-                  target: firstNestedThenId,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedThenExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedThenExecuted ? undefined : '4,4'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedThenExecuted ? '#22c55e' : '#d1d5db' },
-                  label: 'true',
-                  labelStyle: { fill: nestedThenExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-                
-                // 递归处理 then 分支内部连线
-                buildBranchEdges(nestedThenChildren, child.id, 'then', nestedThenExecuted, isDark, edges)
-              }
-              
-              // condition → 第一个 else 子节点
-              if (nestedElseChildren.length > 0) {
-                const firstNestedElse = nestedElseChildren[0]
-                const firstNestedElseId = firstNestedElse.id || `${child.id}-else-0`
-                edges.push({
-                  id: `edge-${child.id}-${firstNestedElseId}`,
-                  source: child.id,
-                  sourceHandle: 'bottom',
-                  target: firstNestedElseId,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedElseExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedElseExecuted ? undefined : '4,4'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedElseExecuted ? '#22c55e' : '#d1d5db' },
-                  label: 'false',
-                  labelStyle: { fill: nestedElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-                
-                // 递归处理 else 分支内部连线
-                buildBranchEdges(nestedElseChildren, child.id, 'else', nestedElseExecuted, isDark, edges)
-              }
-            } else if (child.collapsed && child.action === 'condition') {
-              // 嵌套 condition 折叠时：直接连接到目标节点
-              const nestedConditionResult = child.condition_result
-              const nestedThenExecuted = nestedConditionResult === true
-              const nestedElseExecuted = nestedConditionResult === false
-              let nestedBranchTarget = branchTarget
-              if (child.next && child.next.length > 0) {
-                const targetId = child.next[0]
-                const targetStep = steps.find(s => s.id === targetId || s.name === targetId)
-                if (targetStep) nestedBranchTarget = targetStep
-              }
-              if (nestedBranchTarget) {
-                edges.push({
-                  id: `edge-${child.id}-${nestedBranchTarget.id}`,
-                  source: child.id,
-                  sourceHandle: 'right',
-                  target: nestedBranchTarget.id,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedThenExecuted || nestedElseExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedThenExecuted || nestedElseExecuted ? undefined : '4,4'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedThenExecuted || nestedElseExecuted ? '#22c55e' : '#d1d5db' },
-                  label: nestedThenExecuted ? '✓' : nestedElseExecuted ? '✓' : '✗',
-                  labelStyle: { fill: nestedThenExecuted || nestedElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-              }
-            } else if (child.children && child.children.length > 0) {
-              connectSteps(child.children, child)
-            }
-          }
-          
-          // then 最后节点连接到目标节点：label "✓" 或 "✗"
-          if (branchTarget && visibleThenChildren.length > 0) {
-            const lastThen = visibleThenChildren[visibleThenChildren.length - 1]
-            // 如果最后一个 then 子节点是 condition，连线应该从其子节点发出
-            if (lastThen.action === 'condition' && !lastThen.collapsed) {
-              // 嵌套 condition：从子节点发出连线
-              const lastThenChildrenRaw = lastThen.then_children || lastThen.then || []
-              const lastElseChildrenRaw = lastThen.else_children || lastThen.else || []
-              const lastConditionResult = lastThen.condition_result
-              const lastThenExecuted = lastConditionResult === true
-              const lastElseExecuted = lastConditionResult === false
-              // 嵌套 condition 正常展开，只看其自身折叠状态
-              const lastThenChildren = lastThen.collapsed ? (lastThenExecuted ? lastThenChildrenRaw : []) : lastThenChildrenRaw
-              const lastElseChildren = lastThen.collapsed ? (lastElseExecuted ? lastElseChildrenRaw : []) : lastElseChildrenRaw
-              
-              // then 子节点结束连线
-              if (lastThenChildren.length > 0) {
-                const lastNestedThen = lastThenChildren[lastThenChildren.length - 1]
-                edges.push({
-                  id: `edge-${lastNestedThen.id}-${branchTarget.id}`,
-                  source: lastNestedThen.id,
-                  sourceHandle: 'right',
-                  target: branchTarget.id,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: lastThenExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: lastThenExecuted ? undefined : '5,5'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: lastThenExecuted ? '#22c55e' : '#d1d5db' },
-                  label: lastThenExecuted ? '✓' : '✗',
-                  labelStyle: { fill: lastThenExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-              }
-              
-              // else 子节点结束连线（展开时显示）
-              if (lastElseChildren.length > 0) {
-                const lastNestedElse = lastElseChildren[lastElseChildren.length - 1]
-                // 如果最后一个 else 子节点也是 condition 且展开，递归获取其真正的最后一个节点
-                if (lastNestedElse.action === 'condition' && !lastNestedElse.collapsed) {
-                  const nestedElseThenRaw = lastNestedElse.then_children || lastNestedElse.then || []
-                  const nestedElseElseRaw = lastNestedElse.else_children || lastNestedElse.else || []
-                  const nestedElseResult = lastNestedElse.condition_result
-                  const nestedElseThenExecuted = nestedElseResult === true
-                  const nestedElseElseExecuted = nestedElseResult === false
-                  // 嵌套 condition 正常展开，只看其自身折叠状态
-                  const nestedElseThen = lastNestedElse.collapsed ? (nestedElseThenExecuted ? nestedElseThenRaw : []) : nestedElseThenRaw
-                  const nestedElseElse = lastNestedElse.collapsed ? (nestedElseElseExecuted ? nestedElseElseRaw : []) : nestedElseElseRaw
-                  
-                  if (nestedElseThen.length > 0) {
-                    const finalNode = nestedElseThen[nestedElseThen.length - 1]
-                    edges.push({
-                      id: `edge-${finalNode.id}-${branchTarget.id}`,
-                      source: finalNode.id,
-                      sourceHandle: 'right',
-                      target: branchTarget.id,
-                      targetHandle: 'left',
-                      type: 'default',
-                      style: { 
-                        stroke: nestedElseThenExecuted ? '#22c55e' : '#d1d5db', 
-                        strokeWidth: 2,
-                        strokeDasharray: nestedElseThenExecuted ? undefined : '5,5'
-                      },
-                      markerEnd: { type: MarkerType.ArrowClosed, color: nestedElseThenExecuted ? '#22c55e' : '#d1d5db' },
-                      label: nestedElseThenExecuted ? '✓' : '✗',
-                      labelStyle: { fill: nestedElseThenExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                      labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                    })
-                  }
-                  if (nestedElseElse.length > 0) {
-                    const finalNode = nestedElseElse[nestedElseElse.length - 1]
-                    edges.push({
-                      id: `edge-${finalNode.id}-${branchTarget.id}`,
-                      source: finalNode.id,
-                      sourceHandle: 'right',
-                      target: branchTarget.id,
-                      targetHandle: 'left',
-                      type: 'default',
-                      style: { 
-                        stroke: nestedElseElseExecuted ? '#22c55e' : '#d1d5db', 
-                        strokeWidth: 2,
-                        strokeDasharray: nestedElseElseExecuted ? undefined : '5,5'
-                      },
-                      markerEnd: { type: MarkerType.ArrowClosed, color: nestedElseElseExecuted ? '#22c55e' : '#d1d5db' },
-                      label: nestedElseElseExecuted ? '✓' : '✗',
-                      labelStyle: { fill: nestedElseElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                      labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                    })
-                  }
-                } else {
-                  edges.push({
-                    id: `edge-${lastNestedElse.id}-${branchTarget.id}`,
-                    source: lastNestedElse.id,
-                    sourceHandle: 'right',
-                    target: branchTarget.id,
-                    targetHandle: 'left',
-                    type: 'default',
-                    style: { 
-                      stroke: lastElseExecuted ? '#22c55e' : '#d1d5db', 
-                      strokeWidth: 2,
-                      strokeDasharray: lastElseExecuted ? undefined : '5,5'
-                    },
-                    markerEnd: { type: MarkerType.ArrowClosed, color: lastElseExecuted ? '#22c55e' : '#d1d5db' },
-                    label: lastElseExecuted ? '✓' : '✗',
-                    labelStyle: { fill: lastElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                    labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                  })
-                }
-              }
-            } else if (lastThen.action === 'condition' && lastThen.collapsed) {
-              // 折叠时：condition 本身直接连接到目标节点
-              const lastConditionResult = lastThen.condition_result
-              const lastThenExecuted = lastConditionResult === true
-              const lastElseExecuted = lastConditionResult === false
-              edges.push({
-                id: `edge-${lastThen.id}-${branchTarget.id}`,
-                source: lastThen.id,
-                sourceHandle: 'right',
-                target: branchTarget.id,
-                targetHandle: 'left',
-                type: 'default',
-                style: { 
-                  stroke: lastThenExecuted || lastElseExecuted ? '#22c55e' : '#d1d5db', 
-                  strokeWidth: 2,
-                  strokeDasharray: lastThenExecuted || lastElseExecuted ? undefined : '5,5'
-                },
-                markerEnd: { type: MarkerType.ArrowClosed, color: lastThenExecuted || lastElseExecuted ? '#22c55e' : '#d1d5db' },
-                label: lastThenExecuted || lastElseExecuted ? '✓' : '✗',
-                labelStyle: { fill: lastThenExecuted || lastElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-              })
-            } else {
-              // 非 condition 节点：直接连线
-              edges.push({
-                id: `edge-${lastThen.id}-${branchTarget.id}`,
-                source: lastThen.id,
-                sourceHandle: 'right',
-                target: branchTarget.id,
-                targetHandle: 'left',
-                type: 'default',
-                style: { 
-                  stroke: thenExecuted ? '#22c55e' : '#d1d5db', 
-                  strokeWidth: 2,
-                  strokeDasharray: thenExecuted ? undefined : '5,5'
-                },
-                markerEnd: { type: MarkerType.ArrowClosed, color: thenExecuted ? '#22c55e' : '#d1d5db' },
-                label: thenExecuted ? '✓' : '✗',
-                labelStyle: { fill: thenExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-              })
-            }
-          }
+          processLevel(vThen, false)
         }
-
-        // else 分支连线（从右侧连线）
-        if (visibleElseChildren.length > 0) {
-          const firstElse = visibleElseChildren[0]
-          // condition → else 子节点：label "false"（从右侧连线）
-          edges.push({
-            id: `edge-${current.id}-${firstElse.id || `${current.id}-else-0`}`,
-            source: current.id,
-            sourceHandle: 'right',
-            target: firstElse.id || `${current.id}-else-0`,
-            targetHandle: 'left',
+        if (vElse.length > 0) {
+          addEdge({
+            id: `edge-${step.id}-${vElse[0].id || step.id + '-else-0'}`,
+            source: step.id, sourceHandle: 'right',
+            target: vElse[0].id || step.id + '-else-0', targetHandle: 'left',
             type: 'default',
-            style: { 
-              stroke: elseExecuted ? '#22c55e' : '#d1d5db', 
-              strokeWidth: 2,
-              strokeDasharray: elseExecuted ? undefined : '4,4'
-            },
-            markerEnd: { type: MarkerType.ArrowClosed, color: elseExecuted ? '#22c55e' : '#d1d5db' },
-            label: 'false',
-            labelStyle: { fill: elseExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
+            style: { stroke: ee ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: ee ? undefined : '4,4' },
+            markerEnd: { type: MarkerType.ArrowClosed, color: ee ? '#22c55e' : '#d1d5db' },
+            label: `false(E:${ee})`, labelStyle: { fill: ee ? '#22c55e' : '#9ca3af', fontSize: 9, fontWeight: 'bold' },
             labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
           })
-          // else 子节点链式连接（水平排布）
-          for (let j = 0; j < visibleElseChildren.length - 1; j++) {
-            edges.push({
-              id: `edge-${visibleElseChildren[j].id || `${current.id}-else-${j}`}-${visibleElseChildren[j + 1].id || `${current.id}-else-${j + 1}`}`,
-              source: visibleElseChildren[j].id || `${current.id}-else-${j}`,
-              sourceHandle: 'right',
-              target: visibleElseChildren[j + 1].id || `${current.id}-else-${j + 1}`,
-              targetHandle: 'left',
+          for (let j = 0; j < vElse.length - 1; j++) {
+            addEdge({
+              id: `edge-${vElse[j].id}-${vElse[j + 1].id}`,
+              source: vElse[j].id, sourceHandle: 'right',
+              target: vElse[j + 1].id, targetHandle: 'left',
               type: 'default',
-              style: { stroke: elseExecuted ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: elseExecuted ? undefined : '4,4' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: elseExecuted ? '#22c55e' : '#d1d5db' },
+              style: { stroke: ee ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: ee ? undefined : '4,4' },
+              markerEnd: { type: MarkerType.ArrowClosed, color: ee ? '#22c55e' : '#d1d5db' },
             })
           }
-          
-          // 递归处理 else 子节点内部的连线（使用递归函数处理任意层级嵌套）
-          for (const child of visibleElseChildren) {
-            // 父级折叠时，嵌套 condition 正常展开，不跟随父级折叠
-            // 所以这里不检查 child.collapsed
-            if (child.action === 'condition' && ((child.then_children || child.then)?.length || (child.else_children || child.else)?.length)) {
-              // 获取嵌套 condition 的执行结果
-              const nestedConditionResult = child.condition_result
-              const nestedThenExecuted = nestedConditionResult === true
-              const nestedElseExecuted = nestedConditionResult === false
-              
-              // 嵌套 condition 正常展开，不跟随父级折叠
-              const nestedThenChildrenRaw = child.then_children || child.then || []
-              const nestedElseChildrenRaw = child.else_children || child.else || []
-              // 嵌套 condition 的连线：只看其自身折叠状态，不看父级
-              const nestedThenChildren = child.collapsed ? (nestedThenExecuted ? nestedThenChildrenRaw : []) : nestedThenChildrenRaw
-              const nestedElseChildren = child.collapsed ? (nestedElseExecuted ? nestedElseChildrenRaw : []) : nestedElseChildrenRaw
-              
-              // condition → 第一个 then 子节点
-              if (nestedThenChildren.length > 0) {
-                const firstNestedThen = nestedThenChildren[0]
-                const firstNestedThenId = firstNestedThen.id || `${child.id}-then-0`
-                edges.push({
-                  id: `edge-${child.id}-${firstNestedThenId}`,
-                  source: child.id,
-                  sourceHandle: 'right',
-                  target: firstNestedThenId,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedThenExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedThenExecuted ? undefined : '4,4'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedThenExecuted ? '#22c55e' : '#d1d5db' },
-                  label: 'true',
-                  labelStyle: { fill: nestedThenExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-                
-                // 递归处理 then 分支内部连线
-                buildBranchEdges(nestedThenChildren, child.id, 'then', nestedThenExecuted, isDark, edges)
-              }
-              
-              // condition → 第一个 else 子节点
-              if (nestedElseChildren.length > 0) {
-                const firstNestedElse = nestedElseChildren[0]
-                const firstNestedElseId = firstNestedElse.id || `${child.id}-else-0`
-                edges.push({
-                  id: `edge-${child.id}-${firstNestedElseId}`,
-                  source: child.id,
-                  sourceHandle: 'bottom',
-                  target: firstNestedElseId,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedElseExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedElseExecuted ? undefined : '4,4'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedElseExecuted ? '#22c55e' : '#d1d5db' },
-                  label: 'false',
-                  labelStyle: { fill: nestedElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 11, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-                
-                // 递归处理 else 分支内部连线
-                buildBranchEdges(nestedElseChildren, child.id, 'else', nestedElseExecuted, isDark, edges)
-              }
-            } else if (child.collapsed && child.action === 'condition') {
-              // 嵌套 condition 折叠时：直接连接到目标节点
-              const nestedConditionResult = child.condition_result
-              const nestedThenExecuted = nestedConditionResult === true
-              const nestedElseExecuted = nestedConditionResult === false
-              let nestedBranchTarget = branchTarget
-              if (child.next && child.next.length > 0) {
-                const targetId = child.next[0]
-                const targetStep = steps.find(s => s.id === targetId || s.name === targetId)
-                if (targetStep) nestedBranchTarget = targetStep
-              }
-              if (nestedBranchTarget) {
-                edges.push({
-                  id: `edge-${child.id}-${nestedBranchTarget.id}`,
-                  source: child.id,
-                  sourceHandle: 'right',
-                  target: nestedBranchTarget.id,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedThenExecuted || nestedElseExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedThenExecuted || nestedElseExecuted ? undefined : '4,4'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedThenExecuted || nestedElseExecuted ? '#22c55e' : '#d1d5db' },
-                  label: nestedThenExecuted ? '✓' : nestedElseExecuted ? '✓' : '✗',
-                  labelStyle: { fill: nestedThenExecuted || nestedElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-              }
-            } else if (child.children && child.children.length > 0) {
-              connectSteps(child.children, child)
-            }
-          }
-          
-          // else 最后节点连接到目标节点：label "✓" 或 "✗"
-          if (branchTarget && visibleElseChildren.length > 0) {
-            const lastElse = visibleElseChildren[visibleElseChildren.length - 1]
-            // 如果最后一个 else 子节点是 condition，连线应该从其子节点发出
-            if (lastElse.action === 'condition') {
-              // 嵌套 condition：根据折叠状态和执行状态决定显示哪些子节点
-              const lastThenChildrenRaw = lastElse.then_children || lastElse.then || []
-              const lastElseChildrenRaw = lastElse.else_children || lastElse.else || []
-              const lastConditionResult = lastElse.condition_result
-              const nestedThenExecuted = lastConditionResult === true
-              const nestedElseExecuted = lastConditionResult === false
-              
-              // 嵌套 condition 正常展开，只看其自身折叠状态
-              const visibleNestedThenChildren = lastElse.collapsed ? (nestedThenExecuted ? lastThenChildrenRaw : []) : lastThenChildrenRaw
-              const visibleNestedElseChildren = lastElse.collapsed ? (nestedElseExecuted ? lastElseChildrenRaw : []) : lastElseChildrenRaw
-              
-              // then 子节点结束连线
-              if (visibleNestedThenChildren.length > 0) {
-                const lastNestedThen = visibleNestedThenChildren[visibleNestedThenChildren.length - 1]
-                edges.push({
-                  id: `edge-${lastNestedThen.id}-${branchTarget.id}`,
-                  source: lastNestedThen.id,
-                  sourceHandle: 'right',
-                  target: branchTarget.id,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedThenExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedThenExecuted ? undefined : '5,5'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedThenExecuted ? '#22c55e' : '#d1d5db' },
-                  label: nestedThenExecuted ? '✓' : '✗',
-                  labelStyle: { fill: nestedThenExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-              }
-              
-              // else 子节点结束连线（展开时显示）
-              if (visibleNestedElseChildren.length > 0) {
-                const lastNestedElse = visibleNestedElseChildren[visibleNestedElseChildren.length - 1]
-                edges.push({
-                  id: `edge-${lastNestedElse.id}-${branchTarget.id}`,
-                  source: lastNestedElse.id,
-                  sourceHandle: 'right',
-                  target: branchTarget.id,
-                  targetHandle: 'left',
-                  type: 'default',
-                  style: { 
-                    stroke: nestedElseExecuted ? '#22c55e' : '#d1d5db', 
-                    strokeWidth: 2,
-                    strokeDasharray: nestedElseExecuted ? undefined : '5,5'
-                  },
-                  markerEnd: { type: MarkerType.ArrowClosed, color: nestedElseExecuted ? '#22c55e' : '#d1d5db' },
-                  label: nestedElseExecuted ? '✓' : '✗',
-                  labelStyle: { fill: nestedElseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
-                  labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
-                })
-              }
-            } else {
-              // 非 condition 节点：直接连线
-              edges.push({
-                id: `edge-${lastElse.id || `${current.id}-else-${visibleElseChildren.length - 1}`}-${branchTarget.id}`,
-                source: lastElse.id || `${current.id}-else-${visibleElseChildren.length - 1}`,
-                sourceHandle: 'right',
-                target: branchTarget.id,
-                targetHandle: 'left',
+          processLevel(vElse, false)
+        }
+        // condition 分支出口边：最后一子 → after-target
+        const afterTargets = dg.successors.get(step.id)
+        if (afterTargets && afterTargets.size > 0) {
+          for (const tgt of afterTargets) {
+            if (vThen.length > 0) {
+              const lastThen = vThen[vThen.length - 1]
+              addEdge({
+                id: `edge-${lastThen.id}-${tgt}-cond-${cr}`,
+                source: lastThen.id, sourceHandle: 'right',
+                target: tgt, targetHandle: 'left',
                 type: 'default',
-                style: { 
-                  stroke: elseExecuted ? '#22c55e' : '#d1d5db', 
-                  strokeWidth: 2,
-                  strokeDasharray: elseExecuted ? undefined : '5,5'
-                },
-                markerEnd: { type: MarkerType.ArrowClosed, color: elseExecuted ? '#22c55e' : '#d1d5db' },
-                label: elseExecuted ? '✓' : '✗',
-                labelStyle: { fill: elseExecuted ? '#22c55e' : '#9ca3af', fontSize: 14, fontWeight: 'bold' },
+                style: { stroke: te ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: te ? undefined : '5,5' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: te ? '#22c55e' : '#d1d5db' },
+                label: `T:${te} cr:${cr}`, labelStyle: { fill: te ? '#22c55e' : '#9ca3af', fontSize: 10, fontWeight: 'bold' },
+                labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
+              })
+            }
+            if (vElse.length > 0) {
+              const lastElse = vElse[vElse.length - 1]
+              addEdge({
+                id: `edge-${lastElse.id}-${tgt}-cond-${cr}`,
+                source: lastElse.id, sourceHandle: 'right',
+                target: tgt, targetHandle: 'left',
+                type: 'default',
+                style: { stroke: ee ? '#22c55e' : '#d1d5db', strokeWidth: 2, strokeDasharray: ee ? undefined : '5,5' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: ee ? '#22c55e' : '#d1d5db' },
+                label: `E:${ee} cr:${cr}`, labelStyle: { fill: ee ? '#22c55e' : '#9ca3af', fontSize: 10, fontWeight: 'bold' },
                 labelBgStyle: { fill: isDark ? '#1f2937' : 'white', fillOpacity: 0.9 },
               })
             }
           }
         }
-
-        // 如果两个分支都没有子节点，直接连接到目标节点
-        if (thenChildren.length === 0 && elseChildren.length === 0 && branchTarget) {
-          edges.push({
-            id: `edge-${current.id}-${branchTarget.id}`,
-            source: current.id,
-            sourceHandle: 'right',
-            target: branchTarget.id,
-            targetHandle: 'left',
-            type: 'default',
-            style: { stroke: '#9ca3af', strokeWidth: 2 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-          })
-        }
-
-        continue
       }
-
-      // 其他节点
-      if (parent && i === 0) {
-        const isRunning = current.status === 'running'
-        
-        edges.push({
-          id: `edge-${parent.id}-${current.id}`,
-          source: parent.id,
-          target: current.id,
-          type: 'default',
-          animated: isRunning,
-          style: { stroke: '#9ca3af', strokeWidth: 2 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-        })
-      }
-
-      if (next) {
-        const nextIsRunning = next.status === 'running'
-        
-        edges.push({
-          id: `edge-${current.id}-${next.id}`,
-          source: current.id,
-          target: next.id,
-          type: 'default',
-          animated: nextIsRunning,
-          style: { stroke: '#9ca3af', strokeWidth: 2 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af' },
-        })
-      }
-
-      // 未折叠时递归处理子节点
-      if (current.children?.length && !isCollapsed) {
-        connectSteps(current.children, current)
+      // --- 普通节点：递归子节点 ---
+      else if (step.children?.length && !collapsed) {
+        processLevel(step.children, false)
       }
     }
   }
 
-  connectSteps(steps)
+  processLevel(steps)
   return edges
 }
 
@@ -1815,6 +999,9 @@ function FlowNode({ id, data }: { id: string; data: Record<string, unknown> }) {
             <span className={`text-xs font-medium ${style.color} px-2 py-0.5 rounded-full bg-white/60 dark:bg-black/20`}>
               {actionLabel}
             </span>
+            {d?.action === 'condition' && (
+              <span className="text-xs font-mono text-red-500">cr:{String((d as any).condition_result)}</span>
+            )}
             {d?.action === 'sleep' && (d as any)?.sleepDuration && (
               <span className="text-xs text-purple-600 dark:text-purple-400 font-medium">
                 ⏸️ {(d as any).sleepDuration}
@@ -1986,7 +1173,7 @@ export interface WorkflowGraphProps {
   onLockChange?: (locked: boolean) => void
 }
 
-export function WorkflowGraph({ steps, executionSteps = [], onNodeClick, showMiniMap = true, logLayout = 'none', collapsedNodes: externalCollapsedNodes, onCollapseChange, locked: externalLocked, onLockChange }: WorkflowGraphProps) {
+export function WorkflowGraph({ steps, executionSteps: _executionSteps = [], onNodeClick, showMiniMap = true, logLayout = 'none', collapsedNodes: externalCollapsedNodes, onCollapseChange, locked: externalLocked, onLockChange }: WorkflowGraphProps) {
   const { t } = useTranslation()
   const { isDark } = useThemeStore()
   const [internalCollapsedNodes, setInternalCollapsedNodes] = useState<Set<string>>(new Set())
@@ -2051,13 +1238,10 @@ export function WorkflowGraph({ steps, executionSteps = [], onNodeClick, showMin
   // 合并 executionSteps 的状态到 steps
   const enrichedSteps = useMemo(() => {
     if (!steps || steps.length === 0) return []
-    const execMap = new Map(executionSteps.map((s) => [s.id, s]))
     const enrich = (stepList: FlowStep[]): FlowStep[] => {
       return stepList.map(step => {
-        const exec = execMap.get(step.id)
         const merged = {
           ...step,
-          ...(exec || {}),
           collapsed: collapsedNodes.has(step.id),
         }
         
@@ -2078,7 +1262,7 @@ export function WorkflowGraph({ steps, executionSteps = [], onNodeClick, showMin
       })
     }
     return enrich(steps)
-  }, [steps, executionSteps, collapsedNodes])
+  }, [steps, collapsedNodes])
 
   // 所有 hooks 必须在早期返回之前
   const { nodes: positionedNodes, foreachGroups, parallelGroups } = useMemo(() => {

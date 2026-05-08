@@ -689,29 +689,29 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 				ex.ConditionResult = sr.ConditionResult
 				// For foreach/parallel/loop: replace children, but filter to only include steps defined in the original Do/Steps block
 				if ex.Action == "foreach" || ex.Action == "loop" || ex.Action == "parallel" {
-					// Find definition linearly in wfSteps (top-level)
-					var def *workflow.Step
-					for i := range wfSteps {
-						s := &wfSteps[i]
-						sID := s.ID
-						if sID == "" && s.Name != "" {
-							sID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(s.Name, " ", "-")))
+					// Recursively search step definition for any nesting depth
+					var findStepDef func(steps []workflow.Step, key string) *workflow.Step
+					findStepDef = func(steps []workflow.Step, key string) *workflow.Step {
+						for i := range steps {
+							s := &steps[i]
+							sID := s.ID
+							if sID == "" && s.Name != "" {
+								sID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(s.Name, " ", "-")))
+							}
+							if sID == key || s.Name == key { return s }
+							for _, children := range [][]workflow.Step{s.Steps, s.Do, s.Then, s.Else} {
+								if d := findStepDef(children, key); d != nil { return d }
+							}
 						}
-						if sID == lookupKey || s.Name == lookupKey {
-							def = s
-							break
-						}
+						return nil
 					}
+					def := findStepDef(wfSteps, lookupKey)
 					allowedNames := make(map[string]bool)
 					if def != nil {
 						if def.Action == "foreach" || def.Action == "loop" {
-							for _, doStep := range def.Do {
-								allowedNames[doStep.Name] = true
-							}
+							for _, doStep := range def.Do { allowedNames[doStep.Name] = true }
 						} else if def.Action == "parallel" {
-							for _, pStep := range def.Steps {
-								allowedNames[pStep.Name] = true
-							}
+							for _, pStep := range def.Steps { allowedNames[pStep.Name] = true }
 						}
 					}
 					

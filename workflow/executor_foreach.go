@@ -240,6 +240,13 @@ func (e *Executor) parseItems(items interface{}) ([]string, error) {
 }
 
 func (e *Executor) executeContainerDAG(container Step, depth int, result *WorkflowResult) StepResult {
+	// Generate container step ID
+	containerStepID := container.ID
+	if containerStepID == "" {
+		containerStepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(container.Name, " ", "-")))
+	}
+	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", nil)
+
 	// 创建子工作流
 	childWf := &Workflow{
 		Name:      container.Name,
@@ -419,11 +426,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		ready = newReady
 	}
 	
-	// Generate container step ID
-	containerStepID := container.ID
-	if containerStepID == "" {
-		containerStepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(container.Name, " ", "-")))
-	}
 	
 	if hasError {
 		containerResult := StepResult{
@@ -434,6 +436,10 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			Error:    firstErr,
 			Children: containerChildren,
 		}
+			if container.Action == "condition" {
+				evalResult, _ := e.evaluateExpression(container.Expression)
+				containerResult.ConditionResult = &evalResult
+			}
 		// Send WebSocket events for container completion
 		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, "", nil)
 		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", nil)
@@ -452,6 +458,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		containerResult.Children = nil
 		// Determine which branch was executed based on condition result
 		evalResult, _ := e.evaluateExpression(container.Expression)
+			containerResult.ConditionResult = &evalResult
 		if evalResult {
 			containerResult.ThenChildren = containerChildren // Executed branch
 			// Create skipped results for else branch
@@ -475,7 +482,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	}
 	
 	// Send WebSocket events for container completion
-	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", nil)
+	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", containerResult.ConditionResult)
 	return containerResult
 }
 
