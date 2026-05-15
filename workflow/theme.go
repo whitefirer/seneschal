@@ -17,17 +17,17 @@ type Theme struct {
 
 // 预定义主题
 var (
-	// ThemeDefault 默认主题（蓝色系）
+	// ThemeDefault Claude Code style — warm amber palette
 	ThemeDefault = Theme{
 		Name:      "Default",
-		Primary:   lipgloss.Color("6"),
-		Secondary: lipgloss.Color("245"),
-		Success:   lipgloss.Color("10"),
-		Error:     lipgloss.Color("9"),
-		Warning:   lipgloss.Color("208"),
-		Info:      lipgloss.Color("12"),
-		Gray:      lipgloss.Color("245"),
-		Border:    lipgloss.Color("6"),
+		Primary:   lipgloss.Color("214"),  // warm amber
+		Secondary: lipgloss.Color("243"),  // muted gray
+		Success:   lipgloss.Color("78"),   // soft green
+		Error:     lipgloss.Color("203"),  // warm red
+		Warning:   lipgloss.Color("221"),  // soft yellow
+		Info:      lipgloss.Color("117"),  // soft blue
+		Gray:      lipgloss.Color("243"),  // muted gray
+		Border:    lipgloss.Color("214"),  // amber border
 	}
 	
 	// ThemeDark 暗黑主题（紫色系）
@@ -94,6 +94,8 @@ func GetTheme(name string) Theme {
 		return ThemeMonokai
 	case "ocean", "Ocean":
 		return ThemeOcean
+	case "claude", "Claude":
+		return ThemeDefault
 	default:
 		return ThemeDefault
 	}
@@ -107,6 +109,7 @@ func ListThemes() []string {
 		"light",
 		"monokai",
 		"ocean",
+		"claude",
 	}
 }
 
@@ -158,4 +161,12 @@ func (ts *ThemeStyle) Gray() lipgloss.Style {
 // Border 边框样式
 func (ts *ThemeStyle) Border() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(ts.theme.Border)
+}
+
+// BoxStyle returns a rounded-box with theme border color.
+func (ts *ThemeStyle) BoxStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ts.theme.Border).
+		Padding(0, 1)
 }

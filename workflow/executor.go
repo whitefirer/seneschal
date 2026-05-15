@@ -24,6 +24,8 @@ type ProgressEvent struct {
 	Duration        string `json:"duration,omitempty"` // step duration
 	Time            string `json:"time,omitempty"`   // timestamp
 	ConditionResult *bool  `json:"condition_result,omitempty"` // condition evaluation result
+	Depth      int    `json:"depth,omitempty"`
+	ParentId   string `json:"parent_id,omitempty"`
 	StepName   string `json:"step_name,omitempty"`
 }
 
@@ -41,6 +43,9 @@ type Executor struct {
 	outputMode     OutputMode          // output mode
 	totalSteps     int
 	themeName      string              // theme name
+	tuiStyle       string              // TUI style: "hermes" or "claude"
+	forceColor     bool                // force color output even if not a terminal
+	parentId       string              // current parent container ID for child steps
 }
 
 // SetStepCallback sets a callback invoked after each step completes.
@@ -70,9 +75,12 @@ func (e *Executor) SetOutputMode(mode OutputMode) {
 	if e.themeName == "" {
 		e.themeName = "default"
 	}
-	if mode == OutputModeRealtime {
+	if mode == OutputModeTUI {
 		theme := GetTheme(e.themeName)
-		e.realtimePrinter = NewRealtimePrinter(theme)
+		if e.tuiStyle == "" {
+			e.tuiStyle = "hermes"
+		}
+		e.realtimePrinter = NewRealtimePrinter(theme, e.tuiStyle)
 		return
 	}
 	if e.colorEnabled() {
@@ -85,15 +93,44 @@ func (e *Executor) SetOutputMode(mode OutputMode) {
 // SetTheme sets the color theme.
 func (e *Executor) SetTheme(themeName string) {
 	e.themeName = themeName
-	// Reinitialize richPrinter if already created
+	theme := GetTheme(themeName)
+	// Reinitialize printers if already created
 	if e.richPrinter != nil {
-		color := e.colorEnabled()
-		e.richPrinter = NewRichPrinter(e.outputMode, color, themeName)
+		e.richPrinter = NewRichPrinter(e.outputMode, e.colorEnabled(), themeName)
+	}
+	if e.realtimePrinter != nil {
+		e.realtimePrinter = NewRealtimePrinter(theme, e.tuiStyle)
+	}
+}
+
+// SetTuiStyle sets the TUI visual style ("hermes" or "claude").
+func (e *Executor) SetTuiStyle(style string) {
+	e.tuiStyle = style
+	if e.tuiStyle == "" {
+		e.tuiStyle = "hermes"
+	}
+	if e.realtimePrinter != nil {
+		e.realtimePrinter = NewRealtimePrinter(GetTheme(e.themeName), e.tuiStyle)
+	}
+}
+
+// SetForceColor forces color output even if stdout is not a terminal.
+func (e *Executor) SetForceColor(v bool) {
+	e.forceColor = v
+	// Recreate printers with updated color setting
+	if e.richPrinter != nil {
+		e.richPrinter = NewRichPrinter(e.outputMode, e.colorEnabled(), e.themeName)
+	}
+	if e.realtimePrinter != nil {
+		e.realtimePrinter = NewRealtimePrinter(GetTheme(e.themeName), e.tuiStyle)
 	}
 }
 
 // colorEnabled checks if color output is enabled
 func (e *Executor) colorEnabled() bool {
+	if e.forceColor || os.Getenv("GOWORKFLOW_FORCE_COLOR") != "" {
+		return true
+	}
 	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
@@ -125,7 +162,7 @@ func (e *Executor) GetContext() *Context {
 }
 
 // sendEvent sends a progress event if OnProgress is set.
-func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration string, conditionResult *bool) {
+func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration string, depth int, parentId string, conditionResult *bool) {
 	event := ProgressEvent{
 		Type:            typ,
 		Name:            name,
@@ -134,6 +171,8 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 		Status:          status,
 		Output:          output,
 		Duration:        duration,
+		Depth:           depth,
+		ParentId:        parentId,
 		Time:            Now(),
 		ConditionResult: conditionResult,
 	}
@@ -145,6 +184,9 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 	// 实时进度模式：更新 TUI
 	if e.realtimePrinter != nil {
 		e.realtimePrinter.Update(ProgressEvent{
+			StepId:   stepId,
+			Depth:    depth,
+			ParentId: parentId,
 			StepName: name,
 			Action:   action,
 			Status:   status,
@@ -169,13 +211,13 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		result.Variables[k] = v
 	}
 
-	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", nil)
+	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", 0, "", nil)
 
 	// Validate workflow
 
-	// 实时进度模式：真实终端 → TUI，管道 → 降级 rich
-	if e.outputMode == OutputModeRealtime {
-		if isTerminal() {
+	// TUI 模式：真实终端或强制颜色 → TUI，否则降级 rich
+	if e.outputMode == OutputModeTUI {
+		if isTerminal() || e.forceColor || os.Getenv("GOWORKFLOW_FORCE_COLOR") != "" {
 			e.realtimePrinter.Start()
 			e.verbose = false
 			e.printer = nil
@@ -217,7 +259,7 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 	// 统一使用 DAG 模式执行（线性流程是链式 DAG 的特例）
 	e.executeDAG(wf, result)
 
-	e.sendEvent("workflow_end", wf.Name, "", "", result.Status, result.Error, "", nil)
+	e.sendEvent("workflow_end", wf.Name, "", "", result.Status, result.Error, "", 0, "", nil)
 
 	result.EndTime = Now()
 
@@ -590,7 +632,7 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 		e.printer.PrintStepStart(step.Name, step.Action, depth)
 	}
 
-	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", nil)
+	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, e.parentId, nil)
 
 	if e.dryRun {
 		result.Status = "skipped"
@@ -673,13 +715,17 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 	if err != nil {
 		result.Status = "failed"
 		result.Error = err.Error()
-		if e.verbose {
+		if e.richPrinter != nil {
+			e.richPrinter.PrintStepResult(step.Name, "failed", err.Error(), result.Duration, depth)
+		} else if e.verbose {
 			fmt.Printf("%s  ✗ %s: %s\n", indent, step.Name, err.Error())
 		}
 	} else {
 		result.Status = "success"
 		result.Output = output
-		if output != "" && e.verbose {
+		if e.richPrinter != nil {
+			e.richPrinter.PrintStepResult(step.Name, "success", output, result.Duration, depth)
+		} else if output != "" && e.verbose {
 			preview := output
 			if len(preview) > 200 {
 				preview = preview[:200] + "..."
@@ -695,11 +741,11 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 
 	// Send step_output event if there's output
 	if result.Output != "" {
-		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, result.Duration, nil)
+		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, result.Duration, depth, e.parentId, nil)
 	}
 
 	// Send step_complete event
-	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, result.ConditionResult)
+	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, depth, e.parentId, result.ConditionResult)
 
 	return result
 }

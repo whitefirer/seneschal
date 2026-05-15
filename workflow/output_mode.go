@@ -14,8 +14,8 @@ const (
 	OutputModeTimeline OutputMode = "timeline"
 	// OutputModeCompact 紧凑模式（适合 CI/CD）
 	OutputModeCompact OutputMode = "compact"
-	// OutputModeRealtime 实时进度 TUI 模式
-	OutputModeRealtime OutputMode = "realtime"
+	// OutputModeTUI 终端进度 TUI 模式
+	OutputModeTUI OutputMode = "tui"
 )
 
 // ParseOutputMode 解析输出模式字符串
@@ -31,8 +31,8 @@ func ParseOutputMode(s string) OutputMode {
 		return OutputModeTimeline
 	case "compact", "ci":
 		return OutputModeCompact
-	case "realtime", "tui", "progress":
-		return OutputModeRealtime
+	case "tui", "realtime", "progress":
+		return OutputModeTUI
 	default:
 		return OutputModePlain
 	}

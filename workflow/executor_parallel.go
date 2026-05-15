@@ -8,7 +8,9 @@ import (
 
 func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult) (string, []StepResult, error) {
 	// Print parallel with pretty output
-	if e.printer != nil {
+	if e.richPrinter != nil {
+		e.richPrinter.PrintParallel(len(step.Steps))
+	} else if e.printer != nil {
 		e.printer.PrintParallel(len(step.Steps))
 	}
 

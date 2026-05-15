@@ -54,7 +54,9 @@ func (e *Executor) execCondition(step Step, depth int, result *WorkflowResult) (
 	}
 
 	// Print condition with pretty output
-	if e.printer != nil {
+	if e.richPrinter != nil {
+		e.richPrinter.PrintCondition(expr, evalResult)
+	} else if e.printer != nil {
 		e.printer.PrintCondition(expr, evalResult)
 	}
 

@@ -62,22 +62,27 @@ func main() {
 func printUsage() {
 	fmt.Print(banner)
 	fmt.Println("Usage:")
-	fmt.Println("  goworkflow run <file.yaml> [--var key=value ...] [--verbose] [--dry-run] [--output-mode MODE]")
+	fmt.Println("  goworkflow run <file.yaml> [--var key=value ...] [--verbose] [--dry-run] [--output-mode MODE] [--theme THEME] [--force-color]")
 	fmt.Println("")
 	fmt.Println("Output Modes:")
-	fmt.Println("  plain     - Plain text output (default)")
-	fmt.Println("  rich      - Rich styled output with colors and icons")
+	fmt.Println("  rich      - Rich styled output (default)")
+	fmt.Println("  plain     - Plain text output")
 	fmt.Println("  dag       - DAG graph visualization")
 	fmt.Println("  timeline  - Timeline view with progress bars")
 	fmt.Println("  compact   - Compact output suitable for CI/CD")
-	fmt.Println("  realtime  - Real-time TUI progress with animation")
+	fmt.Println("  tui       - Terminal UI with live progress animation")
 	fmt.Println("")
 	fmt.Println("Themes:")
-	fmt.Println("  default   - Default blue theme")
+	fmt.Println("  default   - Claude Code warm amber theme")
+	fmt.Println("  claude    - Same as default")
 	fmt.Println("  dark      - Dark purple theme")
 	fmt.Println("  light     - Light green theme")
 	fmt.Println("  monokai   - Monokai theme")
 	fmt.Println("  ocean     - Ocean blue theme")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --force-color, -f   Force color output even when piped")
+	fmt.Println("  --tui-style STYLE   TUI visual style: hermes (default) or claude")
 	fmt.Println("  goworkflow create <name> [description] [--output file.yaml]")
 	fmt.Println("  goworkflow validate <file.yaml>")
 	fmt.Println("  goworkflow show <file.yaml>")
@@ -103,8 +108,8 @@ func printUsage() {
 	fmt.Println("")
 }
 
-func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun bool, outputMode string, themeName string, remaining []string) {
-	outputMode = "plain"
+func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun bool, outputMode string, themeName string, forceColor bool, tuiStyle string, remaining []string) {
+	outputMode = "rich"
 	themeName = "default"
 	vars = make(map[string]string)
 	remaining = make([]string, 0)
@@ -132,6 +137,13 @@ func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun boo
 				themeName = args[i+1]
 				i++
 			}
+		case "--force-color", "-f":
+			forceColor = true
+		case "--tui-style":
+			if i+1 < len(args) {
+				tuiStyle = args[i+1]
+				i++
+			}
 		default:
 			remaining = append(remaining, args[i])
 		}
@@ -140,7 +152,7 @@ func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun boo
 }
 
 func cmdRun(args []string) {
-	vars, verbose, dryRun, outputModeStr, themeName, remaining := parseFlags(args)
+	vars, verbose, dryRun, outputModeStr, themeName, forceColor, tuiStyle, remaining := parseFlags(args)
 	if len(remaining) == 0 {
 		fmt.Println("Error: please specify a workflow YAML file")
 		fmt.Println("Usage: goworkflow run <file.yaml> [--var key=value ...] [--verbose] [--dry-run]")
@@ -170,6 +182,8 @@ func cmdRun(args []string) {
 	executor := workflow.NewExecutor(vars)
 	executor.SetVerbose(verbose)
 	executor.SetDryRun(dryRun)
+	executor.SetForceColor(forceColor)
+	executor.SetTuiStyle(tuiStyle)
 	executor.SetOutputMode(outputMode)
 	executor.SetTheme(themeName)
 
@@ -177,7 +191,7 @@ func cmdRun(args []string) {
 }
 
 func cmdCreate(args []string) {
-	_, _, _, _, _, remaining := parseFlags(args)
+	_, _, _, _, _, _, _, remaining := parseFlags(args)
 
 	if len(remaining) == 0 {
 		fmt.Println("Error: please specify a workflow name")

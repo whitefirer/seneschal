@@ -20,9 +20,11 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 		method = "GET"
 	}
 
-	// Print HTTP call with pretty output (will update with status after)
-	if e.verbose {
-		fmt.Printf("    %s%s %s%s\n", ColorMagenta, method, ColorReset, url)
+	// Print HTTP request with pretty output
+	if e.verbose && e.richPrinter != nil {
+		e.richPrinter.PrintHTTPRequest(method, url)
+	} else if e.verbose {
+		fmt.Printf("    %s %s\n", method, url)
 	}
 
 	var bodyReader io.Reader
@@ -73,7 +75,9 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 	output := fmt.Sprintf("Status: %d (%s)\n%s", resp.StatusCode, duration.Truncate(time.Millisecond), string(body))
 
 	// Print HTTP response with pretty output
-	if e.printer != nil {
+	if e.richPrinter != nil {
+		e.richPrinter.PrintHTTPCall(method, url, resp.StatusCode, duration.Truncate(time.Millisecond))
+	} else if e.printer != nil {
 		e.printer.PrintHTTPCall(method, url, resp.StatusCode, duration.Truncate(time.Millisecond))
 	}
 

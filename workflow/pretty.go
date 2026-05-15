@@ -133,7 +133,7 @@ func (p *PrettyPrinter) PrintHTTPCall(method, url string, status int, duration t
 		if status >= 400 {
 			statusColor = ColorRed
 		}
-		fmt.Printf("    %s%s %s %s←%s %s%d%s (%s)\n", ColorMagenta, method, ColorReset, url, ColorReset, ColorGray, statusColor, status, ColorReset, ColorGray, duration.String(), ColorReset)
+		fmt.Printf("    %s%s%s %s%s←%s%s%d%s (%s%s%s)\n", ColorMagenta, method, ColorReset, url, ColorReset, ColorGray, statusColor, status, ColorReset, ColorGray, duration.String(), ColorReset)
 	} else {
 		fmt.Printf("    %s %s ← %d (%s)\n", method, url, status, duration.String())
 	}
@@ -146,7 +146,7 @@ func (p *PrettyPrinter) PrintCondition(expr string, result bool) {
 		resultStr = "true"
 	}
 	if p.color {
-		fmt.Printf("    %s?%s %s%s  %s→%s %s%s\n", ColorCyan, ColorReset, ColorYellow, expr, ColorReset, ColorGray, ColorReset, ColorMagenta, resultStr, ColorReset)
+		fmt.Printf("    %s?%s %s%s%s  %s→%s %s%s%s\n", ColorCyan, ColorReset, ColorYellow, expr, ColorReset, ColorGray, ColorReset, ColorMagenta, resultStr, ColorReset)
 	} else {
 		fmt.Printf("    ? %s → %s\n", expr, resultStr)
 	}
@@ -276,7 +276,7 @@ func (p *PrettyPrinter) PrintDryRun() {
 	if p.color {
 		fmt.Printf("\n  %s⚠️  DRY RUN MODE - No actions executed%s\n\n", ColorYellow, ColorReset)
 	} else {
-		fmt.Println("\n  ⚠️  DRY RUN MODE - No actions executed\n")
+		fmt.Print("\n  ⚠️  DRY RUN MODE - No actions executed\n\n")
 	}
 }
 

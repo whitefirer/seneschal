@@ -8,21 +8,20 @@ import (
 	"time"
 )
 
-// ANSI 控制码
 const (
-	ansiHome   = "\033[H"   // 光标到左上角
-	ansiClear  = "\033[2J"  // 清屏
-	ansiClrLn  = "\033[K"   // 清到行尾
-	ansiHide   = "\033[?25l" // 隐藏光标
-	ansiShow   = "\033[?25h" // 显示光标
+	ansiHome  = "\033[H"
+	ansiClear = "\033[2J"
+	ansiClrLn = "\033[K"
+	ansiHide  = "\033[?25l"
+	ansiShow  = "\033[?25h"
 )
 
 var spin = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// stepRec 单步骤记录（去重用）
 type stepRec struct {
-	name, action, status, dur string
-	order                     int
+	stepId, name, action, status, dur, parentId string
+	depth                                       int
+	order                                       int
 }
 
 type stateStore struct {
@@ -34,19 +33,28 @@ type stateStore struct {
 func newStateStore() *stateStore { return &stateStore{m: make(map[string]*stepRec)} }
 
 func (s *stateStore) put(e ProgressEvent) {
+	if e.Action == "" {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := e.StepName
+	k := e.StepId
 	if k == "" {
 		k = e.Name
+	}
+	nm := e.Name
+	if e.StepName != "" {
+		nm = e.StepName
 	}
 	if r, ok := s.m[k]; ok {
 		r.status = e.Status
 		r.dur = e.Duration
+		r.name = nm
 	} else {
 		s.m[k] = &stepRec{
-			name: k, action: e.Action,
+			stepId: k, name: nm, action: e.Action,
 			status: e.Status, dur: e.Duration,
+			depth: e.Depth, parentId: e.ParentId,
 			order: len(s.keys),
 		}
 		s.keys = append(s.keys, k)
@@ -63,7 +71,16 @@ func (s *stateStore) all() []stepRec {
 	return out
 }
 
-// RealtimePrinter 实时进度打印机（纯 ANSI，无 TUI 依赖）
+func (s *stateStore) flushRunning() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.m {
+		if r.status == "running" {
+			r.status = "completed"
+		}
+	}
+}
+
 type RealtimePrinter struct {
 	store     *stateStore
 	sty       *ThemeStyle
@@ -72,18 +89,22 @@ type RealtimePrinter struct {
 	stopCh    chan struct{}
 	lastLines int
 	frame     int
+	tuiStyle  string
 }
 
-func NewRealtimePrinter(theme Theme) *RealtimePrinter {
+func NewRealtimePrinter(theme Theme, tuiStyle string) *RealtimePrinter {
+	if tuiStyle == "" {
+		tuiStyle = "hermes"
+	}
 	return &RealtimePrinter{
-		store:  newStateStore(),
-		sty:    NewThemeStyle(theme),
-		stopCh: make(chan struct{}),
+		store:    newStateStore(),
+		sty:      NewThemeStyle(theme),
+		stopCh:   make(chan struct{}),
+		tuiStyle: tuiStyle,
 	}
 }
 
 func (p *RealtimePrinter) Start() {
-	// 清屏 + 隐藏光标
 	fmt.Fprint(os.Stdout, ansiClear+ansiHome+ansiHide)
 	p.ticker = time.NewTicker(60 * time.Millisecond)
 	go p.loop()
@@ -104,55 +125,99 @@ func (p *RealtimePrinter) Update(event ProgressEvent) {
 	p.store.put(event)
 }
 
-// render 输出一帧
 func (p *RealtimePrinter) render() {
+	if p.tuiStyle == "claude" {
+		p.renderClaude()
+		return
+	}
+	p.renderHermes()
+}
+
+func (p *RealtimePrinter) renderHermes() {
 	p.frame = (p.frame + 1) % len(spin)
 
 	var b strings.Builder
+	w := 72
+	inner := w - 2
+	contentW := inner - 2
+	prim := p.sty.Primary()
 
-	w := 80
-	div := p.sty.Primary().Render(strings.Repeat("━", w))
+	b.WriteString(prim.Render("╭" + strings.Repeat("─", inner) + "╮") + "\n")
 
-	// 标题
-	b.WriteString(div + "\n")
-	title := p.sty.Primary().Bold(true).Render(" ⚡ goworkflow")
+	titleLeft := prim.Bold(true).Render(" goworkflow")
 	if p.done {
-		title += p.sty.Warning().Render("  [Ctrl-C 退出]")
+		titleRight := p.sty.Gray().Render("Ctrl-C to exit")
+		spacer := inner - termWidth(titleLeft) - termWidth(titleRight) - 2
+		if spacer < 0 { spacer = 0 }
+		b.WriteString("│" + titleLeft + strings.Repeat(" ", spacer) + "  " + titleRight + "│\n")
+	} else {
+		titleRight := p.sty.Gray().Render(spin[p.frame] + " Running...")
+		spacer := inner - termWidth(titleLeft) - termWidth(titleRight) - 2
+		if spacer < 0 { spacer = 0 }
+		b.WriteString("│" + titleLeft + strings.Repeat(" ", spacer) + "  " + titleRight + "│\n")
 	}
-	b.WriteString(title + "\n" + div + "\n")
+	b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
 
-	// 步骤
+	// Steps
 	steps := p.store.all()
 	doneCount, failCount, runCount := 0, 0, 0
-
 	cap := 12
 	start := 0
 	if len(steps) > cap {
 		start = len(steps) - cap
 	}
 
+	// Build children map for container stats
+	children := map[string][]stepRec{}
+	for i := range steps {
+		s := &steps[i]
+		if s.parentId != "" {
+			children[s.parentId] = append(children[s.parentId], *s)
+		}
+	}
+
+	// Count ALL depth-0 steps (not just visible window)
+	parentTotal := 0
+	for _, s := range steps {
+		if s.depth == 0 {
+			parentTotal++
+			switch s.status {
+			case "completed", "success", "done":
+				doneCount++
+			case "failed":
+				failCount++
+			case "running":
+				runCount++
+			}
+		}
+	}
+
 	for i := start; i < len(steps); i++ {
 		s := steps[i]
-		b.WriteString(" " + p.stepLine(s) + "\n")
-		switch s.status {
-		case "completed", "success", "done":
-			doneCount++
-		case "failed":
-			failCount++
-		case "running":
-			runCount++
+		childStats := ""
+		if kids, ok := children[s.stepId]; ok && s.depth == 0 {
+			okc, badc := 0, 0
+			for _, k := range kids {
+				if k.status == "failed" { badc++ } else if k.status != "running" { okc++ }
+			}
+			childStats = fmt.Sprintf("%d/%d", okc+badc, len(kids))
 		}
+
+		line := p.stepLine(s, childStats)
+		pad := contentW - termWidth(line)
+		if pad < 0 { pad = 0 }
+		b.WriteString("│ " + line + strings.Repeat(" ", pad) + " │\n")
 	}
 
 	shown := len(steps) - start
 	for i := shown; i < cap; i++ {
-		b.WriteString(strings.Repeat(" ", w) + "\n")
+		b.WriteString("│" + strings.Repeat(" ", inner) + "│\n")
 	}
 
-	// 底部统计
-	b.WriteString(p.sty.Gray().Render(strings.Repeat("─", w)) + "\n")
+	// Status bar
+	b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
 
-	flag := " "
+	flag := p.sty.Gray().Render("○")
 	if p.done {
 		if failCount > 0 {
 			flag = p.sty.Error().Render("✗")
@@ -160,37 +225,44 @@ func (p *RealtimePrinter) render() {
 			flag = p.sty.Success().Render("✓")
 		}
 	} else if runCount > 0 {
-		flag = p.sty.Primary().Render(spin[p.frame])
+		flag = prim.Render(spin[p.frame])
 	}
 
-	b.WriteString(" " + flag + " " +
-		p.sty.Success().Render(fmt.Sprintf("%d done", doneCount)) + "  " +
-		p.sty.Warning().Render(fmt.Sprintf("%d running", runCount)) + "  " +
-		p.sty.Error().Render(fmt.Sprintf("%d failed", failCount)) + "  " +
-		p.sty.Gray().Render(fmt.Sprintf("%d total", len(steps))))
-
-	// 进度条
-	if len(steps) > 0 {
-		bw := 26
-		r := float64(doneCount+failCount) / float64(len(steps))
-		if r > 1 {
-			r = 1
-		}
-		f := int(r * float64(bw))
-		bar := strings.Repeat("█", f) + strings.Repeat("░", bw-f)
-		if failCount > 0 {
-			bar = p.sty.Error().Render(bar)
-		} else if p.done {
-			bar = p.sty.Success().Render(bar)
-		} else {
-			bar = p.sty.Primary().Render(bar)
-		}
-		b.WriteString("  " + bar + fmt.Sprintf(" %d%%", int(r*100)))
+	pct := 0
+	if parentTotal > 0 {
+		pct = int(float64(doneCount+failCount) / float64(parentTotal) * 100)
+		if pct > 100 { pct = 100 }
 	}
+
+	bw := 16
+	filled := pct * bw / 100
+	barPlain := strings.Repeat("█", filled) + strings.Repeat("░", bw-filled)
+	if failCount > 0 {
+		barPlain = p.sty.Error().Render(barPlain)
+	} else if p.done {
+		barPlain = p.sty.Success().Render(barPlain)
+	} else {
+		barPlain = prim.Render(barPlain)
+	}
+
+	counts := fmt.Sprintf("○ %d done · %d running · %d failed · %d total  %s %d%%",
+		doneCount, runCount, failCount, parentTotal,
+		strings.Repeat("█", filled)+strings.Repeat("░", bw-filled),
+		pct)
+	statusPad := contentW - len([]rune(counts))
+	if statusPad < 0 { statusPad = 0 }
+
+	line := flag + " " +
+		p.sty.Success().Render(fmt.Sprintf("%d done", doneCount)) + " · " +
+		p.sty.Warning().Render(fmt.Sprintf("%d running", runCount)) + " · " +
+		p.sty.Error().Render(fmt.Sprintf("%d failed", failCount)) + " · " +
+		p.sty.Gray().Render(fmt.Sprintf("%d total", parentTotal)) +
+		"  " + barPlain + fmt.Sprintf(" %d%%", pct)
+
+	b.WriteString("│ " + line + strings.Repeat(" ", statusPad) + " │\n")
+	b.WriteString(prim.Render("╰" + strings.Repeat("─", inner) + "╯") + "\n")
 
 	out := b.String()
-
-	// 计算需要清除的旧行
 	newLines := strings.Count(out, "\n")
 	if p.lastLines > newLines {
 		for i := 0; i < p.lastLines-newLines+1; i++ {
@@ -198,13 +270,126 @@ func (p *RealtimePrinter) render() {
 		}
 	}
 	p.lastLines = newLines
-
-	// 移到顶 + 输出
 	fmt.Fprint(os.Stdout, ansiHome+out)
 }
 
-func (p *RealtimePrinter) stepLine(s stepRec) string {
-	var icon string
+func (p *RealtimePrinter) renderClaude() {
+	p.frame = (p.frame + 1) % len(spin)
+
+	var b strings.Builder
+	w := 72
+	prim := p.sty.Primary()
+	rule := prim.Render(strings.Repeat("━", w))
+
+	b.WriteString("\n")
+	b.WriteString(rule + "\n")
+
+	titleLeft := prim.Bold(true).Render("  goworkflow")
+	if p.done {
+		b.WriteString(titleLeft + "\n")
+	} else {
+		right := p.sty.Gray().Render(spin[p.frame] + " Running...")
+		b.WriteString(titleLeft + "  " + right + "\n")
+	}
+	b.WriteString(rule + "\n")
+	b.WriteString("\n")
+
+	steps := p.store.all()
+	doneCount, failCount, runCount := 0, 0, 0
+	cap := 12
+	start := 0
+	if len(steps) > cap {
+		start = len(steps) - cap
+	}
+
+	children := map[string][]stepRec{}
+	for i := range steps {
+		s := &steps[i]
+		if s.parentId != "" {
+			children[s.parentId] = append(children[s.parentId], *s)
+		}
+	}
+
+	parentTotalCC := 0
+	for _, s := range steps {
+		if s.depth == 0 {
+			parentTotalCC++
+			switch s.status {
+			case "completed", "success", "done":
+				doneCount++
+			case "failed":
+				failCount++
+			case "running":
+				runCount++
+			}
+		}
+	}
+
+	for i := start; i < len(steps); i++ {
+		s := steps[i]
+		line := p.stepLineCC(s)
+		b.WriteString("  " + line + "\n")
+	}
+
+	shown := len(steps) - start
+	for i := shown; i < cap; i++ {
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+
+	b.WriteString(rule + "\n")
+
+	flag := p.sty.Gray().Render("○")
+	if p.done {
+		if failCount > 0 {
+			flag = p.sty.Error().Render("✗")
+		} else {
+			flag = p.sty.Success().Render("✓")
+		}
+	} else if runCount > 0 {
+		flag = prim.Render(spin[p.frame])
+	}
+
+	pct := 0
+	if parentTotalCC > 0 {
+		pct = int(float64(doneCount+failCount) / float64(parentTotalCC) * 100)
+		if pct > 100 { pct = 100 }
+	}
+
+	bw := 16
+	filled := pct * bw / 100
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", bw-filled)
+	if failCount > 0 {
+		bar = p.sty.Error().Render(bar)
+	} else if p.done {
+		bar = p.sty.Success().Render(bar)
+	} else {
+		bar = prim.Render(bar)
+	}
+
+	stats := "  " + flag + " " +
+		p.sty.Success().Render(fmt.Sprintf("%d done", doneCount)) + " · " +
+		p.sty.Warning().Render(fmt.Sprintf("%d running", runCount)) + " · " +
+		p.sty.Error().Render(fmt.Sprintf("%d failed", failCount)) + " · " +
+		p.sty.Gray().Render(fmt.Sprintf("%d total", parentTotalCC))
+
+	b.WriteString(stats + "    " + bar + fmt.Sprintf(" %d%%", pct) + "\n")
+	b.WriteString(rule + "\n")
+
+	out := b.String()
+	newLines := strings.Count(out, "\n")
+	if p.lastLines > newLines {
+		for i := 0; i < p.lastLines-newLines+1; i++ {
+			out += ansiClrLn + "\n"
+		}
+	}
+	p.lastLines = newLines
+	fmt.Fprint(os.Stdout, ansiHome+out)
+}
+
+func (p *RealtimePrinter) stepLine(s stepRec, childStats string) string {
+	indent := strings.Repeat("  ", s.depth)
+	icon := p.sty.Gray().Render("○")
 	switch s.status {
 	case "completed", "success", "done":
 		icon = p.sty.Success().Render("✓")
@@ -212,97 +397,144 @@ func (p *RealtimePrinter) stepLine(s stepRec) string {
 		icon = p.sty.Error().Render("✗")
 	case "running":
 		icon = p.sty.Warning().Render(spin[p.frame])
-	default:
-		icon = p.sty.Gray().Render("·")
 	}
 
-	act := actionI(s.action, p.sty)
-	nm := p.sty.Secondary().Render(truncS(s.name, 28))
-	tag := p.sty.Gray().Render(fmt.Sprintf("%-8s", s.action))
+	actIcon := actionIconTUI(s.action, p.sty)
+	nm := p.sty.Primary().Render(truncS(s.name, 22-s.depth*2))
+	tag := p.sty.Gray().Render(fmt.Sprintf("%-7s", s.action))
+	if childStats != "" {
+		tag = p.sty.Gray().Render(childStats)
+	}
 	dur := ""
 	if s.dur != "" {
-		dur = p.sty.Gray().Render(" " + s.dur)
+		dur = p.sty.Info().Render(" " + s.dur)
 	}
-	return fmt.Sprintf("%s %s %s %s%s", icon, act, nm, tag, dur)
+	return fmt.Sprintf("%s%s %s %s %s%s", indent, icon, actIcon, nm, tag, dur)
 }
 
-func actionI(act string, sty *ThemeStyle) string {
+func (p *RealtimePrinter) stepLineCC(s stepRec) string {
+	indent := strings.Repeat("  ", s.depth)
+	icon := p.sty.Gray().Render("○")
+	switch s.status {
+	case "completed", "success", "done":
+		icon = p.sty.Success().Render("✓")
+	case "failed":
+		icon = p.sty.Error().Render("✗")
+	case "running":
+		icon = p.sty.Warning().Render(spin[p.frame])
+	}
+	nm := p.sty.Primary().Render(padRight(truncS(s.name, 24-s.depth*2), 26-s.depth*2))
+	tag := p.sty.Gray().Render(fmt.Sprintf("%-10s", s.action))
+	dur := ""
+	if s.dur != "" {
+		dur = p.sty.Info().Render(s.dur)
+	}
+	return fmt.Sprintf("%s%s %s %s %s", indent, icon, nm, tag, dur)
+}
+
+func actionIconTUI(act string, sty *ThemeStyle) string {
 	switch act {
 	case "shell":
-		return sty.Primary().Render("💻")
+		return sty.Info().Render("◇")
 	case "http":
-		return sty.Info().Render("🌐")
+		return sty.Info().Render("○")
 	case "log":
-		return sty.Gray().Render("📢")
+		return sty.Gray().Render("◆")
 	case "sleep":
-		return sty.Gray().Render("💤")
+		return sty.Gray().Render("◌")
 	case "condition":
-		return sty.Secondary().Render("🔀")
+		return sty.Warning().Render("◇")
 	case "set":
-		return sty.Gray().Render("📝")
+		return sty.Gray().Render("◦")
 	case "parallel":
-		return sty.Primary().Render("⚡")
+		return sty.Info().Render("◎")
 	case "foreach", "loop":
-		return sty.Info().Render("↻")
+		return sty.Info().Render("◈")
 	}
 	return sty.Gray().Render("◦")
 }
 
 func truncS(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
+	if len(s) <= n { return s }
 	return s[:n-1] + "…"
 }
 
-// Stop 停止动画并显示最终结果
+func padRight(s string, n int) string {
+	rl := len([]rune(s))
+	if rl >= n { return s }
+	return s + strings.Repeat(" ", n-rl)
+}
+
+func stripAnsi(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	skip := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\033' {
+			skip = true
+			continue
+		}
+		if skip {
+			if s[i] == 'm' { skip = false }
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func termWidth(s string) int {
+	return len([]rune(stripAnsi(s)))
+}
+
 func (p *RealtimePrinter) Stop(result *WorkflowResult, startTime, endTime string) {
 	p.done = true
-	// 最后刷新一帧
+	p.store.flushRunning()
 	p.render()
-	// 停止定时器
 	if p.ticker != nil {
 		p.ticker.Stop()
 	}
 	close(p.stopCh)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
 
-	// 显示光标，换行输出最终结果
 	fmt.Fprint(os.Stdout, ansiShow+"\r\n\n")
-	printFinal2(p.sty, result, startTime, endTime)
+	printFinal(p.sty, p.tuiStyle, result, startTime, endTime)
 }
 
-func printFinal2(sty *ThemeStyle, result *WorkflowResult, startTime, endTime string) {
-	div := strings.Repeat("━", 60)
-	clr := sty.Success()
-	lab := "✅ SUCCESS"
-	if result.Status == "failed" {
-		clr = sty.Error()
-		lab = "❌ FAILED"
-	}
-	fmt.Println(clr.Render(div))
-	fmt.Println(clr.Bold(true).Render("  " + lab))
-	fmt.Println(clr.Render(div))
-	fmt.Println()
-
-	ok, bad, ct := 0, 0, 0
+func printFinal(sty *ThemeStyle, tuiStyle string, result *WorkflowResult, startTime, endTime string) {
+	ok, bad := 0, 0
 	for _, s := range result.Steps {
-		if s.Action == "parallel" || s.Action == "foreach" {
-			ct++
-		}
-		if s.Status == "failed" {
-			bad++
-		} else {
-			ok++
-		}
+		if s.Status == "failed" { bad++ } else { ok++ }
 	}
-	fmt.Printf("  📦 %d steps (%d containers)\n", len(result.Steps), ct)
-	fmt.Printf("  %s %d passed\n", sty.Success().Render("✓"), ok-ct)
+
+	statusStyle := sty.Success()
+	statusIcon := "✓"
+	statusLabel := "SUCCESS"
+	if result.Status == "failed" {
+		statusStyle = sty.Error()
+		statusIcon = "✗"
+		statusLabel = "FAILED"
+	}
+
+	start, _ := time.Parse(time.RFC3339, startTime)
+	end, _ := time.Parse(time.RFC3339, endTime)
+	dur := end.Sub(start).Round(time.Millisecond).String()
+
+	var lines []string
+	lines = append(lines, statusStyle.Bold(true).Render(fmt.Sprintf("  %s %s", statusIcon, statusLabel)))
+	stats := fmt.Sprintf("  %s/%s steps · %s",
+		sty.Success().Render(fmt.Sprintf("%d", ok)),
+		sty.Gray().Render(fmt.Sprintf("%d", len(result.Steps))),
+		sty.Info().Render(dur))
+	lines = append(lines, stats)
 	if bad > 0 {
-		fmt.Printf("  %s %d failed\n", sty.Error().Render("✗"), bad)
+		lines = append(lines, sty.Error().Render(fmt.Sprintf("  %d failed", bad)))
 	}
-	sa, _ := time.Parse(time.RFC3339, startTime)
-	sb, _ := time.Parse(time.RFC3339, endTime)
-	fmt.Printf("  ⏱  %s\n", sb.Sub(sa).Round(time.Millisecond))
+
+	if tuiStyle == "claude" {
+		for _, l := range lines { fmt.Println(l) }
+	} else {
+		fmt.Println(sty.BoxStyle().Render(strings.Join(lines, "\n")))
+	}
 	fmt.Println()
 }
