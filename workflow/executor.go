@@ -181,9 +181,9 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 		e.OnProgress(event)
 	}
 	
-	// 实时进度模式：更新 TUI
+	// Send to TUI event channel if available
 	if e.realtimePrinter != nil {
-		e.realtimePrinter.Update(ProgressEvent{
+		ev := ProgressEvent{
 			StepId:   stepId,
 			Depth:    depth,
 			ParentId: parentId,
@@ -191,7 +191,13 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 			Action:   action,
 			Status:   status,
 			Duration: duration,
-		})
+		}
+		if ch := e.realtimePrinter.EventCh; ch != nil {
+			select {
+			case ch <- ev:
+			default:
+			}
+		}
 	}
 }
 
@@ -215,23 +221,44 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 
 	// Validate workflow
 
-	// TUI 模式：真实终端或强制颜色 → TUI，否则降级 rich
+	// TUI 模式：真实终端或强制颜色 → run TUI on current goroutine, workflow in background
 	if e.outputMode == OutputModeTUI {
 		if isTerminal() || e.forceColor || os.Getenv("GOWORKFLOW_FORCE_COLOR") != "" {
-			e.realtimePrinter.Start()
-			e.verbose = false
-			e.printer = nil
+			return e.runTUI(wf, result)
+		}
+		e.realtimePrinter = nil
+		e.outputMode = OutputModeRich
+		if e.colorEnabled() {
+			e.richPrinter = NewRichPrinter(e.outputMode, true, e.themeName)
 		} else {
-			e.realtimePrinter = nil
-			e.outputMode = OutputModeRich
-			if e.colorEnabled() {
-				e.richPrinter = NewRichPrinter(e.outputMode, true, e.themeName)
-			} else {
-				e.richPrinter = NewRichPrinter(e.outputMode, false, e.themeName)
-			}
+			e.richPrinter = NewRichPrinter(e.outputMode, false, e.themeName)
 		}
 	}
 
+	return e.runWorkflow(wf, result)
+}
+
+// runTUI runs the workflow inside a bubbletea TUI on the current goroutine.
+func (e *Executor) runTUI(wf *Workflow, result *WorkflowResult) *WorkflowResult {
+	e.verbose = false
+	e.printer = nil
+
+	ch := make(chan ProgressEvent, 256)
+	e.realtimePrinter.SetEventChannel(ch)
+
+	// Run workflow in background goroutine
+	go func() {
+		e.runWorkflow(wf, result)
+		close(ch)
+	}()
+
+	// Block on TUI (main goroutine)
+	e.realtimePrinter.Run()
+	return result
+}
+
+// runWorkflow executes the core workflow logic without TUI setup.
+func (e *Executor) runWorkflow(wf *Workflow, result *WorkflowResult) *WorkflowResult {
 	// Print header (fallback to legacy printer if richPrinter not set)
 	if e.richPrinter != nil {
 		e.richPrinter.PrintHeader(wf)
@@ -253,6 +280,7 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 	if err := wf.InferDependencies(); err != nil {
 		result.Status = "failed"
 		result.Error = fmt.Sprintf("infer dependencies: %v", err)
+		result.EndTime = Now()
 		return result
 	}
 
