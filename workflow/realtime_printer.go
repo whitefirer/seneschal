@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +112,7 @@ type model struct {
 
 type RealtimePrinter struct {
 	program *tea.Program
+	doneCh  chan struct{}
 }
 
 func NewRealtimePrinter(theme Theme, tuiStyle string) *RealtimePrinter {
@@ -125,16 +125,16 @@ func NewRealtimePrinter(theme Theme, tuiStyle string) *RealtimePrinter {
 		tuiStyle: tuiStyle,
 		events:   make(chan ProgressEvent, 256),
 	}
-	return &RealtimePrinter{program: tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())}
+	return &RealtimePrinter{
+		program: tea.NewProgram(m),
+		doneCh:  make(chan struct{}),
+	}
 }
 
 func (p *RealtimePrinter) Start() {
 	go func() {
-		if _, err := p.program.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
-			os.Exit(1)
-		}
-		// Quit tea.Program so if Run() already returned, this is safe.
+		p.program.Run()
+		close(p.doneCh)
 	}()
 }
 
@@ -144,8 +144,7 @@ func (p *RealtimePrinter) Update(event ProgressEvent) {
 
 func (p *RealtimePrinter) Stop(result *WorkflowResult, startTime, endTime string) {
 	p.program.Send(stopMsg{result: result, startTime: startTime, endTime: endTime})
-	time.Sleep(300 * time.Millisecond)
-	p.program.Quit()
+	<-p.doneCh
 }
 
 type stopMsg struct {
@@ -201,7 +200,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.result = msg.result
 		m.startTime = msg.startTime
 		m.endTime = msg.endTime
-		return m, tea.Quit
+		m.quitting = true
+		// Show final result for 2 seconds then quit
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return tea.Quit()
+		})
 	case tea.QuitMsg:
 		return m, tea.Quit
 	}
