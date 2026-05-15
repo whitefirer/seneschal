@@ -388,11 +388,9 @@ func (m *model) listView() string {
 			childStats = fmt.Sprintf("%d/%d", okc+badc, len(kids))
 		}
 		sel := i == m.cursor
-		line := m.stepLine(s, childStats, sel)
-		pad := contentW - termWidth(line)
-		if pad < 0 { pad = 0 }
+		line := m.stepLine(s, childStats, sel, contentW)
 		if m.tuiStyle == "hermes" {
-			b.WriteString("│ " + line + strings.Repeat(" ", pad) + " │\n")
+			b.WriteString("│ " + line + " │\n")
 		} else {
 			b.WriteString("  " + line + "\n")
 		}
@@ -463,71 +461,86 @@ func (m *model) listView() string {
 // ── Detail view ─────────────────────────────────────────────────────────────
 
 func (m *model) detailView() string {
+	steps := m.store.all()
+	var s stepRec
+	for _, st := range steps {
+		if st.stepId == m.selId {
+			s = st
+			break
+		}
+	}
+
 	var b strings.Builder
 	prim := m.sty.Primary()
 	w := m.termW
 	inner := w - 2
-	listW := w * 40 / 100
-	if listW < 25 { listW = 25 }
-	detailW := w - listW - 3
+	contentW := inner - 4
 
+	// Header
 	b.WriteString(prim.Render("╭" + strings.Repeat("─", inner) + "╮") + "\n")
-	title := prim.Bold(true).Render(" goworkflow")
-	if m.done {
-		b.WriteString(hermesLine(title+"  "+m.sty.Gray().Render("Ctrl-C to exit"), inner, m.tuiStyle) + "\n")
-	} else {
-		b.WriteString(hermesLine(title+"  "+m.sty.Gray().Render(spin[m.frame]+" Running..."), inner, m.tuiStyle) + "\n")
+	header := prim.Bold(true).Render(" " + actionIconTUI(s.action, m.sty) + " " + s.name)
+	escHint := m.sty.Gray().Render("Esc to go back")
+	spacer := inner - termWidth(header) - termWidth(escHint) - 2
+	if spacer < 0 { spacer = 0 }
+	b.WriteString("│" + header + strings.Repeat(" ", spacer) + "  " + escHint + "│\n")
+	b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
+
+	// Metadata
+	b.WriteString("│  " + m.sty.Gray().Render("Action:") + "    " + m.sty.Gray().Render(fmt.Sprintf("%-20s", s.action)) + strings.Repeat(" ", contentW-30) + "│\n")
+	statusLine := "│  " + m.sty.Gray().Render("Status:") + "    " + statusRender(s.status, m.sty)
+	if s.dur != "" {
+		statusLine += "  " + m.sty.Gray().Render("Duration:") + " " + m.sty.Info().Render(s.dur)
 	}
-	b.WriteString(prim.Render("├" + strings.Repeat("─", listW) + "┬" + strings.Repeat("─", detailW) + "┤") + "\n")
+	statusPad := inner - termWidth(statusLine) + 2 // +2 for "│ "
+	if statusPad < 0 { statusPad = 0 }
+	statusLine += strings.Repeat(" ", statusPad) + "│\n"
+	b.WriteString(statusLine)
 
-	steps := m.store.all()
-	visH := m.termH - 3 - 2
-	if visH < 1 { visH = 1 }
+	// Divider
+	b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
 
-	for i := m.scroll; i < len(steps) && (i-m.scroll) < visH; i++ {
-		s := steps[i]
-		sel := i == m.cursor
-		line := m.shortStepLine(s, sel)
-		pad := listW - termWidth(line)
-		if pad < 0 { pad = 0 }
-		b.WriteString("│" + line + strings.Repeat(" ", pad) + "│")
-		if s.stepId == m.selId {
-			b.WriteString(m.renderDetail(s, detailW))
-		} else {
-			b.WriteString(strings.Repeat(" ", detailW))
+	// Output section
+	bodyH := m.termH - 6 // header + meta + divider + footer
+	if bodyH < 3 { bodyH = 3 }
+
+	output := s.output
+	if output == "" {
+		output = "(no output)"
+	}
+	lines := strings.Split(output, "\n")
+
+	// Scrollable output
+	showLines := lines
+	if len(lines) > bodyH {
+		start := len(lines) - bodyH
+		if start < 0 { start = 0 }
+		showLines = lines[start:]
+	}
+
+	for _, l := range showLines {
+		trimmed := l
+		if termWidth(trimmed) > contentW {
+			// Truncate to fit
+			for termWidth(trimmed) > contentW && len(trimmed) > 3 {
+				trimmed = trimmed[:len(trimmed)-1]
+			}
+			trimmed += "..."
 		}
-		b.WriteString("\n")
-	}
-	for i := len(steps) - m.scroll; i < visH; i++ {
-		b.WriteString("│" + strings.Repeat(" ", listW) + "│" + strings.Repeat(" ", detailW) + "\n")
+		pad := contentW - termWidth(trimmed)
+		if pad < 0 { pad = 0 }
+		b.WriteString("│  " + m.sty.Gray().Render(trimmed) + strings.Repeat(" ", pad) + " │\n")
 	}
 
-	b.WriteString(prim.Render("├" + strings.Repeat("─", listW) + "┴" + strings.Repeat("─", detailW) + "┤") + "\n")
-	b.WriteString(hermesLine("  Esc:back  ↑↓:scroll  q:quit", inner, m.tuiStyle) + "\n")
+	// Pad remaining space
+	shown := len(showLines)
+	for i := shown; i < bodyH; i++ {
+		b.WriteString("│" + strings.Repeat(" ", inner) + "│\n")
+	}
+
+	// Footer
 	b.WriteString(prim.Render("╰" + strings.Repeat("─", inner) + "╯") + "\n")
 
 	return b.String()
-}
-
-func (m *model) renderDetail(s stepRec, width int) string {
-	pad := width - 2
-	if pad < 10 { pad = 10 }
-	title := " " + m.sty.Primary().Bold(true).Render("STEP DETAIL")
-	div := m.sty.Gray().Render(strings.Repeat("─", pad-len([]rune(" STEP DETAIL "))))
-	out := title + div + "\n\n"
-	out += "  " + m.sty.Gray().Render("Name:") + "      " + m.sty.Primary().Render(truncS(s.name, 25)) + "\n"
-	out += "  " + m.sty.Gray().Render("Action:") + "    " + m.sty.Gray().Render(s.action) + "\n"
-	out += "  " + m.sty.Gray().Render("Status:") + "    " + statusRender(s.status, m.sty) + "\n"
-	if s.dur != "" {
-		out += "  " + m.sty.Gray().Render("Duration:") + "  " + m.sty.Info().Render(s.dur) + "\n"
-	}
-	if s.output != "" {
-		out += "\n " + m.sty.Gray().Render(strings.Repeat("─", pad-1)) + "\n"
-		output := s.output
-		if len(output) > 400 { output = output[:400] + "..." }
-		out += " " + m.sty.Gray().Render(output)
-	}
-	return out
 }
 
 // ── Final view ──────────────────────────────────────────────────────────────
@@ -573,7 +586,7 @@ func (m *model) finalView() string {
 
 // ── Step lines ──────────────────────────────────────────────────────────────
 
-func (m *model) stepLine(s stepRec, childStats string, sel bool) string {
+func (m *model) stepLine(s stepRec, childStats string, sel bool, fullW int) string {
 	indent := strings.Repeat("  ", s.depth)
 	nameW := 26 - s.depth*2
 	if nameW < 3 { nameW = 3 }
@@ -600,6 +613,10 @@ func (m *model) stepLine(s stepRec, childStats string, sel bool) string {
 	}
 
 	line := fmt.Sprintf("%s%s %s %s %s%s", indent, icon, actIcon, nm, tag, dur)
+	// Pad to full width, then highlight if selected
+	pad := fullW - termWidth(line)
+	if pad < 0 { pad = 0 }
+	line += strings.Repeat(" ", pad)
 	if sel {
 		line = lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(line)
 	}
