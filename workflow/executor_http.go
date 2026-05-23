@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 		bodyReader = strings.NewReader(bodyStr)
 	}
 
-	// Parse timeout
+	// Parse per-step timeout
 	timeout := 60 * time.Second
 	if step.Timeout != "" {
 		if parsed, err := ParseDuration(step.Timeout); err == nil {
@@ -44,11 +45,14 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 		}
 	}
 
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest(method, url, bodyReader)
+	// 复用共享 httpClient(共享 transport/连接池),用 request context 控制每步超时
+	req, err := http.NewRequestWithContext(context.Background(), method, url, bodyReader)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	defer cancel()
+	req = req.WithContext(ctx)
 
 	// Set headers
 	for k, v := range step.Headers {
@@ -60,7 +64,7 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 	}
 
 	start := time.Now()
-	resp, err := client.Do(req)
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("HTTP request failed: %w", err)
 	}

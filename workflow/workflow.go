@@ -105,6 +105,11 @@ type StepResult struct {
 	HTTPMethod string `json:"httpMethod,omitempty"` // HTTP Method
 	// Log fields
 	LogMessage string `json:"logMessage,omitempty"` // Log 消息
+	// 确定性标记(AI 集成用,见 docs/PRODUCT.md 的"双确定性模型")
+	// Nondeterministic:本步结果每次可能不同(AI step 及其下游,由引擎传播算法推导)
+	// SideEffecting:本步有副作用但可复现(shell/http/template 写盘)
+	Nondeterministic bool `json:"nondeterministic,omitempty"`
+	SideEffecting    bool `json:"sideEffecting,omitempty"`
 }
 
 // WorkflowResult holds the result of executing a workflow.
@@ -116,4 +121,7 @@ type WorkflowResult struct {
 	Error     string        `json:"error,omitempty"`
 	StartTime string        `json:"startTime,omitempty"`
 	EndTime   string        `json:"endTime,omitempty"`
+	// Nondeterministic:整条 workflow 是否含非确定步骤(AI 及其下游)
+	// 由引擎传播算法推导,Phase 2 实现
+	Nondeterministic bool `json:"nondeterministic,omitempty"`
 }
