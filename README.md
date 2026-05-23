@@ -1,89 +1,106 @@
 # goworkflow
 
-A lightweight YAML-driven workflow engine written in Go. Define workflows in YAML, run them from CLI, and change behavior simply by editing the YAML file.
+一个 YAML 驱动的工作流引擎。用 YAML 描述工作流,一次定义、反复执行;**没配 AI 时是确定性的可重放引擎,配了 AI 后可在标定步骤里引入智能**。
 
 ![Workflow Execution](images/night-workflow.png)
 ![Dark Theme](images/dark-workflow.png)
 
-## Features
+## 为什么用它
 
-- **YAML-first**: Define complete workflows in YAML with variables, conditions, and nested steps
-- **Rich Actions**: shell commands, HTTP requests, conditional branching, parallel execution, loops, templates, logging, sleep
-- **Hot Reload**: Edit YAML → workflow behavior changes automatically on next run
-- **Variable Substitution**: `{{.variable}}` syntax in any string field
-- **Zero Dependencies** (beyond `gopkg.in/yaml.v3`): Single binary, no runtime dependencies
-- **Dry Run**: Preview workflow execution without running commands
+- **YAML 即一切**:变量、条件、分支、循环、并行、HTTP、模板渲染,全部在 YAML 里写完。改行为 = 改 YAML,重新跑。
+- **确定优先**:工作流本身是可审、可版控、可重放的蓝图。AI 只在你显式标定的步骤里作为"函数"介入,产出进入变量系统,不破坏其余流程的确定性。
+- **AI 可选,渐进增强**:没有 AI 时一切照常;接入 AI 后,可让某一步做摘要、分类、语义判断,甚至用一句话"把 staging 更到最新"自动选工作流并填参执行。
+- **多渠道触达**:同一套引擎,本机 CLI / Web UI / IM Bot(飞书等)/ 编程 API 都能触发与查看执行。
+- **单二进制部署**:server 内嵌前端,一个 `goworkflow-server` 全部搞定。
 
-## Quick Start
+## 三个产物
+
+| 产物 | 路径 | 用途 |
+|---|---|---|
+| `goworkflow` | `cmd/cli/` | 命令行工具,本机运行/校验/TUI 实时查看工作流 |
+| `goworkflow-server` | `cmd/server/` | HTTP + WebSocket 服务,内嵌 React 前端,远程运行/编辑/可视化 |
+| `workflow` | `workflow/` | 可复用的 Go 库,核心执行引擎(DAG 调度、变量、多种 action) |
+
+## 快速开始
 
 ```bash
-# Create a workflow
+# 构建全部
+./build.sh
+
+# 创建一个工作流
 goworkflow create my-workflow "My first workflow"
 
-# Run it
+# 运行(详细输出)
 goworkflow run my-workflow.yaml --verbose
 
-# Validate syntax
+# 校验语法
 goworkflow validate my-workflow.yaml
 
-# View the YAML
-goworkflow show my-workflow.yaml
+# 用 TUI 实时查看
+goworkflow run my-workflow.yaml --output-mode tui
 
-# Show example template
+# 查看示例模板
 goworkflow template
 ```
 
-## CLI Commands
+## CLI 命令
 
-| Command | Description |
-|---------|-------------|
-| `run <file>` | Execute a workflow YAML file |
-| `create <name>` | Create a new workflow YAML file |
-| `validate <file>` | Validate a workflow YAML file |
-| `show <file>` | Display the workflow YAML content |
-| `edit <file>` | Open YAML in editor for editing |
-| `template` | Show example workflow YAML |
+| 命令 | 说明 |
+|---|---|
+| `run <file>` | 执行一个工作流 YAML 文件 |
+| `create <name>` | 创建一个新的工作流 YAML 文件 |
+| `validate <file>` | 校验工作流语法 |
+| `show <file>` | 显示工作流 YAML 内容 |
+| `edit <file>` | 在编辑器中打开 YAML |
+| `template` | 打印示例工作流 YAML |
+| `chat <意图>` | _(Roadmap)_ 自然语言触发:选工作流 + 填变量 + 执行 |
+| `generate <需求>` | _(Roadmap)_ 自然语言生成工作流 YAML |
 
-### Run Flags
+### run 常用 flag
 
-| Flag | Description |
-|------|-------------|
-| `--var key=value` | Override or set workflow variables |
-| `--verbose` / `-v` | Enable verbose output |
-| `--dry-run` | Preview without executing |
+| flag | 说明 |
+|---|---|
+| `--var key=value` | 覆盖或设置工作流变量 |
+| `--verbose` / `-v` | 详细输出 |
+| `--dry-run` | 预演,不实际执行 |
+| `--output-mode <mode>` | 输出模式:`plain` / `rich` / `compact` / `dag` / `timeline` / `tui` |
+| `--theme <name>` | 主题(配合 rich/tui) |
+| `--tui-style` | TUI 样式 |
 
 ## YAML Schema
 
 ```yaml
-name: my-workflow          # Required: workflow name
-version: "1.0"             # Optional: version string
-description: "Description" # Optional: human-readable description
+name: my-workflow          # 必填:工作流名称
+version: "1.0"             # 可选:版本字符串
+description: "Description" # 可选:人类可读描述
 
-variables:                  # Optional: workflow-level variables
+variables:                  # 可选:工作流级变量
   key: value
 
-steps:                      # Required: list of steps
-  - name: step-name         # Required: unique step name
-    action: shell           # Required: action type
-    # ... action-specific fields
+steps:                      # 必填:步骤列表
+  - name: step-name         # 必填:唯一步骤名
+    action: shell           # 必填:action 类型
+    # ... 各 action 的字段
 ```
 
-## Supported Actions
+## 支持的 Action
 
-### `shell` - Execute Commands
+### `shell` - 执行命令
 ```yaml
 - name: build
   action: shell
   command: "go build -o app ."
-  dir: "./src"              # Optional: working directory
-  shell: bash               # Optional: sh, bash, cmd, powershell
-  env:                      # Optional: step-level env vars
+  dir: "./src"              # 可选:工作目录
+  shell: bash               # 可选:sh, bash, cmd, powershell
+  env:                      # 可选:步骤级环境变量
     GOOS: linux
-  continue_on_error: false  # Optional: continue on failure
-  save_output: build_result # Optional: save output to variable
+  continue_on_error: false  # 可选:失败后是否继续
+  output_var: build_result  # 可选:整段输出存入变量
+  output_vars:              # 可选:按 KEY=VALUE 行解析存多个变量
+    - GO_VERSION
 ```
 
-### `http` - HTTP Requests
+### `http` - HTTP 请求
 ```yaml
 - name: api-call
   action: http
@@ -93,10 +110,10 @@ steps:                      # Required: list of steps
     Content-Type: application/json
   body: '{"key": "{{.value}}"}'
   timeout: "30s"
-  save_output: response     # Save response to variable
+  save_output: response     # 响应(含 status/body/headers)存入变量
 ```
 
-### `condition` - Branching
+### `condition` - 条件分支
 ```yaml
 - name: check-env
   action: condition
@@ -111,16 +128,16 @@ steps:                      # Required: list of steps
       message: "Development!"
 ```
 
-Supported operators: `==`, `!=`, `contains`, `>`, `<`, `>=`, `<=`, `== empty`
+支持运算符:`==`、`!=`、`contains`、`>`、`<`、`>=`、`<=`(表达式求值由 [expr-lang/expr](https://github.com/expr-lang/expr) 提供)。
 
-### `set` - Set Variables
+### `set` - 设置变量
 ```yaml
 - name: my-var
   action: set
   value: "computed value {{.other_var}}"
 ```
 
-### `parallel` - Concurrent Execution
+### `parallel` - 并行执行
 ```yaml
 - name: parallel-jobs
   action: parallel
@@ -133,7 +150,7 @@ Supported operators: `==`, `!=`, `contains`, `>`, `<`, `>=`, `<=`, `== empty`
       command: "echo B"
 ```
 
-### `foreach` - Loop Over Items
+### `foreach` - 循环遍历
 ```yaml
 - name: process-services
   action: foreach
@@ -141,21 +158,21 @@ Supported operators: `==`, `!=`, `contains`, `>`, `<`, `>=`, `<=`, `== empty`
     - "auth"
     - "api"
     - "worker"
-  item_var: service         # Default: "item"
+  item_var: service         # 默认: "item"
   do:
     - name: deploy
       action: log
       message: "Deploying {{.service}}"
 ```
 
-### `sleep` - Wait
+### `sleep` - 等待
 ```yaml
 - name: wait
   action: sleep
-  duration: "5s"            # Go duration format: 1s, 2m, 1h30m
+  duration: "5s"            # Go duration: 1s, 2m, 1h30m
 ```
 
-### `log` - Print Messages
+### `log` - 打印消息
 ```yaml
 - name: info-msg
   action: log
@@ -163,30 +180,56 @@ Supported operators: `==`, `!=`, `contains`, `>`, `<`, `>=`, `<=`, `== empty`
   level: info               # info, warn, error
 ```
 
-### `template` - Render Template Files
+### `template` - 渲染模板文件
 ```yaml
 - name: render-config
   action: template
-  source: "config.template" # Template file with {{.var}} syntax
-  output: "config.yaml"     # Output file path
+  source: "config.template" # 含 {{.var}} 语法的模板文件
+  output: "config.yaml"     # 输出文件路径
 ```
 
-## Edit YAML → Change Behavior
+### `ai` / `ai_decide` - AI 介入 _(Roadmap)_
 
-The core idea: **edit the YAML file, re-run, behavior changes**.
+> 这是 goworkflow 区别于其他 YAML 工作流工具的核心差异化能力,详见 [docs/PRODUCT.md](docs/PRODUCT.md)。
 
-```bash
-# View current workflow
-goworkflow show deploy.yaml
+```yaml
+# ai:让 AI 生成一段文本(摘要、翻译、分类…)
+- name: summarize
+  action: ai
+  prompt: "用一句话总结这段日志:{{.log_text}}"
+  save_output: summary
 
-# Edit it (change env from "dev" to "prod", add steps, etc.)
-# Any text editor works: VS Code, vim, notepad...
-
-# Re-run - the engine picks up all changes
-goworkflow run deploy.yaml --verbose --var ENV=prod
+# ai_decide:让 AI 做语义判断,返回 true/false
+- name: is_urgent
+  action: ai_decide
+  question: "这封邮件是否需要紧急处理?{{.email_body}}"
+  save_output: is_urgent   # 自动转 bool
 ```
 
-## Go Library Usage
+**支持 Anthropic 协议(Claude 原生、DeepSeek `api.deepseek.com/anthropic` 等)与 OpenAI 兼容协议**。API key 只从环境变量读取,绝不写进 YAML。详见 [docs/PRODUCT.md](docs/PRODUCT.md) 的"Provider 架构"。
+
+## DAG 模式
+
+默认步骤按顺序执行;显式声明依赖即按 DAG 并发调度:
+
+```yaml
+mode: dag
+steps:
+  - name: build
+    action: shell
+    command: go build
+    next: [test, lint]      # build 完成后,test 和 lint 并发
+  - name: test
+    action: shell
+    command: go test ./...
+    depends_on: [build]
+  - name: lint
+    action: shell
+    command: golangci-lint run
+    depends_on: [build]
+```
+
+## Go 库用法
 
 ```go
 package main
@@ -197,13 +240,11 @@ import (
 )
 
 func main() {
-    // Create workflow from YAML file
     wf, err := workflow.ParseFile("my-workflow.yaml")
     if err != nil {
         panic(err)
     }
 
-    // Execute
     executor := workflow.NewExecutor(map[string]string{
         "ENV": "production",
     })
@@ -213,13 +254,40 @@ func main() {
 }
 ```
 
-## Build
+## 编辑 YAML → 改变行为
+
+核心理念:**编辑 YAML,重跑,行为改变**。
 
 ```bash
-cd goworkflow
-go mod tidy
-go build -o goworkflow.exe .
+goworkflow show deploy.yaml     # 查看当前
+# (在任意编辑器里改:把 env 从 dev 改成 prod、加步骤…)
+goworkflow run deploy.yaml --verbose --var ENV=prod
 ```
+
+## 构建
+
+```bash
+./build.sh                    # 前端 + server + cli 一起构建
+# 或手动:
+cd web/frontend && npm run build && cd ../..
+go build -o goworkflow-server ./cmd/server/
+go build -o goworkflow ./cmd/cli/
+```
+
+## 服务端运行
+
+```bash
+./start-server.sh
+# 或:./goworkflow-server --port 8888
+```
+
+⚠️ **安全告示**:`goworkflow-server` 默认只监听 `127.0.0.1`,**不要直接暴露到公网**。当前版本未做鉴权,`shell` action 会以服务进程身份执行任意命令。如需远程访问,请放在反向代理(加鉴权、TLS、限流)之后。详见 [ARCHITECTURE.md](ARCHITECTURE.md) 的"安全"章节。
+
+## 进一步阅读
+
+- [docs/PRODUCT.md](docs/PRODUCT.md) — 产品定位、AI 介入的 6 种模式、确定性模型、Provider 与渠道架构
+- [ARCHITECTURE.md](ARCHITECTURE.md) — 技术架构、执行管线、内核数据结构
+- [docs/ROADMAP.md](docs/ROADMAP.md) — 实施路线(Phase 0 - Phase 9)
 
 ## License
 
