@@ -66,6 +66,39 @@ func writeJSON(w http.ResponseWriter, status int, resp APIResponse) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// safePath resolves a workflow name to an absolute path inside the workflows
+// directory. It rejects path-traversal attempts (e.g. ".." or absolute paths)
+// that would escape the directory, and normalizes the .yaml/.yml suffix.
+//
+// On success it returns the safe absolute path and the normalized file name
+// (e.g. "deploy.yaml"). On failure it returns a non-nil error.
+func (h *Handler) safePath(name string) (absPath, fileName string, err error) {
+	if name == "" {
+		return "", "", fmt.Errorf("workflow name required")
+	}
+
+	// Normalize the suffix early so the containment check sees the final name.
+	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+		name += ".yaml"
+	}
+
+	// Prefix with "/" so filepath.Clean interprets the name as rooted; this
+	// collapses any embedded ".." segments before we join it onto the dir.
+	cleaned := filepath.Clean("/" + name)
+	abs := filepath.Join(h.workflowsDir, cleaned)
+
+	// Containment check: the resolved path must stay within workflowsDir.
+	dir := h.workflowsDir
+	if !strings.HasSuffix(dir, string(os.PathSeparator)) {
+		dir += string(os.PathSeparator)
+	}
+	if !strings.HasPrefix(abs+string(os.PathSeparator), dir) {
+		return "", "", fmt.Errorf("invalid workflow name")
+	}
+
+	return abs, name, nil
+}
+
 // ListWorkflows returns a list of all workflows
 func (h *Handler) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -131,17 +164,12 @@ func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+	path, normName, err := h.safePath(name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
 
-	// Add .yaml extension if not present
-	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-		name += ".yaml"
-	}
-
-	path := filepath.Join(h.workflowsDir, name)
 	content, err := os.ReadFile(path)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errorResp("Workflow not found"))
@@ -149,8 +177,8 @@ func (h *Handler) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, success(WorkflowContent{
-		Name:     strings.TrimSuffix(name, filepath.Ext(name)),
-		FileName: name,
+		Name:     strings.TrimSuffix(normName, filepath.Ext(normName)),
+		FileName: normName,
 		Content:  string(content),
 	}))
 }
@@ -163,10 +191,6 @@ func (h *Handler) SaveWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
-		return
-	}
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -178,12 +202,12 @@ func (h *Handler) SaveWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Normalize line endings to Unix style
 	content := strings.ReplaceAll(string(body), "\r\n", "\n")
 
-	// Add .yaml extension if not present
-	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-		name += ".yaml"
+	path, _, err := h.safePath(name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
+		return
 	}
 
-	path := filepath.Join(h.workflowsDir, name)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
 		return
@@ -202,17 +226,12 @@ func (h *Handler) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+	path, _, err := h.safePath(name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
 
-	// Add .yaml extension if not present
-	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-		name += ".yaml"
-	}
-
-	path := filepath.Join(h.workflowsDir, name)
 	if err := os.Remove(path); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
 		return
@@ -229,17 +248,12 @@ func (h *Handler) ValidateWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
+	path, _, err := h.safePath(name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
 
-	// Add .yaml extension if not present
-	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-		name += ".yaml"
-	}
-
-	path := filepath.Join(h.workflowsDir, name)
 	wf, err := workflow.ParseFile(path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
@@ -271,10 +285,6 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	if name == "" {
-		writeJSON(w, http.StatusBadRequest, errorResp("Workflow name required"))
-		return
-	}
 
 	// Parse request body
 	var req RunRequest
@@ -285,12 +295,12 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Add .yaml extension if not present
-	if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
-		name += ".yaml"
+	path, _, err := h.safePath(name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
+		return
 	}
 
-	path := filepath.Join(h.workflowsDir, name)
 	wf, err := workflow.ParseFile(path)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, errorResp("Workflow not found: "+err.Error()))

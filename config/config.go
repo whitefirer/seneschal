@@ -12,6 +12,10 @@ import (
 
 // ServerConfig holds server configuration.
 type ServerConfig struct {
+	// Host is the bind address. Defaults to "127.0.0.1" so the server is only
+	// reachable locally; set to "0.0.0.0" explicitly to expose it (make sure
+	// you understand the security implications — see ARCHITECTURE.md).
+	Host           string   `yaml:"host"`
 	Port           string   `yaml:"port"`
 	WorkflowsDir   string   `yaml:"workflows_dir"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
@@ -20,6 +24,7 @@ type ServerConfig struct {
 // Default returns a config with safe defaults.
 func Default() *ServerConfig {
 	return &ServerConfig{
+		Host:         "127.0.0.1",
 		Port:         "8888",
 		WorkflowsDir: "./workflows/user",
 		AllowedOrigins: []string{
@@ -29,6 +34,15 @@ func Default() *ServerConfig {
 			"http://127.0.0.1:5173",
 		},
 	}
+}
+
+// Addr returns the "host:port" listen address.
+func (c *ServerConfig) Addr() string {
+	host := c.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return host + ":" + c.Port
 }
 
 // Load reads config from a YAML file. Falls back to Default on error.

@@ -118,7 +118,7 @@ func main() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	addr := fmt.Sprintf(":%s", cfg.Port)
+	addr := cfg.Addr()
 	fmt.Printf("\n")
 	fmt.Printf("  ╔═══════════════════════════════════════════╗\n")
 	fmt.Printf("  ║     goworkflow Web UI Server              ║\n")
