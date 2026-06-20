@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult) (string, []StepResult, error) {
+func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult, parentID string) (string, []StepResult, error) {
 	// Print parallel with pretty output
 	if e.richPrinter != nil {
 		e.richPrinter.PrintParallel(len(step.Steps))
@@ -49,7 +49,7 @@ func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult) (s
 			// Note: step_start, step_output, step_complete are all sent by executeStep()
 			// Don't send again to avoid duplicate output
 			
-			childResult := e.executeStep(s, depth+1, result)
+			childResult := e.executeStep(s, depth+1, result, parentID)
 			
 			mu.Lock()
 			defer mu.Unlock()

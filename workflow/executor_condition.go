@@ -38,7 +38,7 @@ func createSkippedStepResult(s Step) StepResult {
 	return sr
 }
 
-func (e *Executor) execCondition(step Step, depth int, result *WorkflowResult) (string, []StepResult, []StepResult, bool, error) {
+func (e *Executor) execCondition(step Step, depth int, result *WorkflowResult, parentID string) (string, []StepResult, []StepResult, bool, error) {
 	expr, err := e.context.ResolveTemplate(step.Expression)
 	if err != nil {
 		return "", nil, nil, false, fmt.Errorf("resolve expression: %w", err)
@@ -75,7 +75,7 @@ func (e *Executor) execCondition(step Step, depth int, result *WorkflowResult) (
 	var outputs []string
 	var execChildren []StepResult
 	for _, s := range execSteps {
-		sr := e.executeStep(s, depth+1, result)
+		sr := e.executeStep(s, depth+1, result, parentID)
 		if sr.Output != "" {
 			outputs = append(outputs, sr.Output)
 		}

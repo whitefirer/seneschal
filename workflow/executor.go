@@ -45,7 +45,6 @@ type Executor struct {
 	themeName      string              // theme name
 	tuiStyle       string              // TUI style: "hermes" or "claude"
 	forceColor     bool                // force color output even if not a terminal
-	parentId       string              // current parent container ID for child steps
 }
 
 // SetStepCallback sets a callback invoked after each step completes.
@@ -314,16 +313,6 @@ type DAGNode struct {
 	JoinMode  string // "all" (全部完成) 或 "any" (任意完成)
 }
 
-// hasDAGStructure checks if the workflow has DAG structure (next/depends_on fields)
-func (e *Executor) hasDAGStructure(steps []Step) bool {
-	for _, step := range steps {
-		if len(step.Next) > 0 || len(step.DependsOn) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // buildDAGGraph builds a DAG graph from workflow steps
 // 注意：只处理主流程节点，容器子节点由容器的 executeStep 内部处理
 func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
@@ -527,11 +516,11 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 				var stepResult StepResult
 				
 				// 如果是容器节点，递归执行子 DAG
-				if node.Step.Action == "condition" || node.Step.Action == "parallel" || 
+				if node.Step.Action == "condition" || node.Step.Action == "parallel" ||
 				   node.Step.Action == "foreach" || node.Step.Action == "loop" {
-					stepResult = e.executeContainerDAG(node.Step, 0, result)
+					stepResult = e.executeContainerDAG(node.Step, 0, result, "")
 				} else {
-					stepResult = e.executeStep(node.Step, 0, result)
+					stepResult = e.executeStep(node.Step, 0, result, "")
 				}
 
 				resultsMutex.Lock()
@@ -551,8 +540,8 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 			completed[id] = sr
 			completedMutex.Unlock()
 
-			// Update variables
-			for k, v := range e.context.Variables {
+			// Update variables (use Snapshot to avoid racing concurrent Set calls)
+			for k, v := range e.context.Snapshot() {
 				result.Variables[k] = v
 			}
 
@@ -628,7 +617,7 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 
 // executeForeach 执行 foreach/loop 迭代
 
-func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) StepResult {
+func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, parentID string) StepResult {
 	indent := strings.Repeat("  ", depth)
 	startTime := Now()
 
@@ -660,7 +649,7 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 		e.printer.PrintStepStart(step.Name, step.Action, depth)
 	}
 
-	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, e.parentId, nil)
+	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, parentID, nil)
 
 	if e.dryRun {
 		result.Status = "skipped"
@@ -689,7 +678,7 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 		result.HTTPMethod = step.Method
 	case "condition":
 		var execChildren, skippedChildren []StepResult
-		output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult)
+		output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult, stepID)
 		result.ConditionResult = &condResult
 		result.Expression = step.Expression
 		// Condition: 设置 ThenChildren 和 ElseChildren
@@ -711,11 +700,11 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 		output = e.execLog(step)
 		result.LogMessage = step.Message
 	case "parallel":
-		output, children, err = e.execParallel(step, depth, wfResult)
+		output, children, err = e.execParallel(step, depth, wfResult, stepID)
 	case "template":
 		output, err = e.execTemplate(step)
 	case "foreach":
-			sr := e.executeForeach(step, depth, wfResult)
+			sr := e.executeForeach(step, depth, wfResult, stepID)
 			output = sr.Output
 			children = sr.Children
 			if sr.Status == "failed" {
@@ -727,6 +716,14 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 
 	// Set children for parallel/foreach/condition
 	result.Children = children
+
+	// 填充确定性标记初值(见 docs/PRODUCT.md 的"三种确定性层级")
+	// 传播算法在 Phase 2 实现,这里只标 SideEffecting
+	switch step.Action {
+	case "shell", "http", "template":
+		result.SideEffecting = true
+	}
+	// ai / ai_decide 在 Phase 2 加 case 时填 Nondeterministic = true
 
 	result.EndTime = Now()
 	
@@ -769,11 +766,11 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult) S
 
 	// Send step_output event if there's output
 	if result.Output != "" {
-		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, result.Duration, depth, e.parentId, nil)
+		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, result.Duration, depth, parentID, nil)
 	}
 
 	// Send step_complete event
-	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, depth, e.parentId, result.ConditionResult)
+	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, depth, parentID, result.ConditionResult)
 
 	return result
 }

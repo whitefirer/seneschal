@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-func (e *Executor) executeForeach(container Step, depth int, result *WorkflowResult) StepResult {
+func (e *Executor) executeForeach(container Step, depth int, result *WorkflowResult, parentID string) StepResult {
 	// 解析 items
 	items, err := e.parseItems(container.Items)
 	if err != nil {
@@ -38,15 +38,12 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 	}
 
 	allChildren := make([]StepResult, 0)
-	
-	// Set parent context for foreach iterations
+
+	// Container's own step ID becomes the parent for its iteration children.
 	containerStepID := container.ID
 	if containerStepID == "" {
 		containerStepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(container.Name, " ", "-")))
 	}
-	prevParent := e.parentId
-	e.parentId = containerStepID
-	defer func() { e.parentId = prevParent }()
 
 	// 逐个迭代执行
 	for i, item := range items {
@@ -127,9 +124,9 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 					// 递归处理嵌套容器
 					if iterStep.Action == "condition" || iterStep.Action == "parallel" ||
 					   iterStep.Action == "foreach" || iterStep.Action == "loop" {
-						stepResult = e.executeContainerDAG(iterStep, depth+1, result)
+						stepResult = e.executeContainerDAG(iterStep, depth+1, result, containerStepID)
 					} else {
-						stepResult = e.executeStep(iterStep, depth+1, result)
+						stepResult = e.executeStep(iterStep, depth+1, result, containerStepID)
 					}
 					
 					resultsMutex.Lock()
@@ -259,7 +256,7 @@ func (e *Executor) parseItems(items interface{}) ([]string, error) {
 	return result, nil
 }
 
-func (e *Executor) executeContainerDAG(container Step, depth int, result *WorkflowResult) StepResult {
+func (e *Executor) executeContainerDAG(container Step, depth int, result *WorkflowResult, parentID string) StepResult {
 	// Generate container step ID
 	containerStepID := container.ID
 	if containerStepID == "" {
@@ -270,12 +267,12 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	} else if e.printer != nil {
 		e.printer.PrintStepStart(container.Name, container.Action, depth)
 	}
-	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", depth, "", nil)
+	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", depth, parentID, nil)
 
-	// 创建子工作流
+	// 创建子工作流(用 Snapshot 拷贝,避免并发 Set 触发 map iteration panic)
 	childWf := &Workflow{
 		Name:      container.Name,
-		Variables: e.context.Variables,
+		Variables: e.context.Snapshot(),
 	}
 	
 	// 根据容器类型收集子节点
@@ -298,16 +295,14 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		children = container.Steps
 	} else if container.Action == "foreach" || container.Action == "loop" {
 		// Foreach: 迭代执行
-		return e.executeForeach(container, depth, result)
+		return e.executeForeach(container, depth, result, parentID)
 	}
-	
+
 	childWf.Steps = children
 
-	// Set parent context for child steps
-	prevParent := e.parentId
-	e.parentId = containerStepID
-	defer func() { e.parentId = prevParent }()
-	
+	// 子节点的 parentID 是当前容器的 step ID
+	// (parentID 参数显式传递,不再存 Executor 字段,避免并行容器竞争)
+
 	// 为子节点构建子 DAG 图
 	graph, err := e.buildDAGGraph(children)
 	if err != nil {
@@ -372,11 +367,11 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				var stepResult StepResult
 				
 				// 递归处理嵌套容器
-				if node.Step.Action == "condition" || node.Step.Action == "parallel" || 
+				if node.Step.Action == "condition" || node.Step.Action == "parallel" ||
 				   node.Step.Action == "foreach" || node.Step.Action == "loop" {
-					stepResult = e.executeContainerDAG(node.Step, depth+1, result)
+					stepResult = e.executeContainerDAG(node.Step, depth+1, result, containerStepID)
 				} else {
-					stepResult = e.executeStep(node.Step, depth+1, result)
+					stepResult = e.executeStep(node.Step, depth+1, result, containerStepID)
 				}
 				
 				resultsMutex.Lock()
@@ -477,8 +472,8 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				containerResult.ConditionResult = &evalResult
 			}
 		// Send WebSocket events for container completion
-		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, "", depth, "", nil)
-		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, "", nil)
+		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
 		return containerResult
 	}
 	
@@ -518,7 +513,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	}
 	
 	// Send WebSocket events for container completion
-	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", depth, "", containerResult.ConditionResult)
+	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", depth, parentID, containerResult.ConditionResult)
 	return containerResult
 }
 
