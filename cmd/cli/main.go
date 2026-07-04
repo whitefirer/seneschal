@@ -187,7 +187,13 @@ func cmdRun(args []string) {
 	executor.SetOutputMode(outputMode)
 	executor.SetTheme(themeName)
 
-	executor.Execute(wf)
+	result := executor.Execute(wf)
+	// Surface a configuration error (e.g. missing AI key) that Execute reports
+	// before any step runs. Step-level failures are already printed by printers.
+	if result != nil && result.Status == "failed" && result.Error != "" {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+		os.Exit(1)
+	}
 }
 
 func cmdCreate(args []string) {

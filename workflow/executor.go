@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 	"net/http"
+
+	"goworkflow/workflow/ai"
 )
 
 // StepCallback is called after each step completes (including nested steps).
@@ -45,7 +47,18 @@ type Executor struct {
 	themeName      string              // theme name
 	tuiStyle       string              // TUI style: "hermes" or "claude"
 	forceColor     bool                // force color output even if not a terminal
+	// AI integration (Phase 2). aiProvider is set via SetAIProvider or built
+	// from the workflow's ai: config in Execute(). The ai* fields hold
+	// workflow-level defaults; steps may override per-step in M3+.
+	aiProvider    ai.Provider
+	aiModel       string
+	aiMaxTokens   int
+	aiTemperature float64
 }
+
+// SetAIProvider configures the LLM provider used by ai/ai_decide steps.
+// If not called, Execute() builds one from the workflow's ai: config (if any).
+func (e *Executor) SetAIProvider(p ai.Provider) { e.aiProvider = p }
 
 // SetStepCallback sets a callback invoked after each step completes.
 func (e *Executor) SetStepCallback(cb StepCallback) {
@@ -215,6 +228,27 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		e.context.Set(k, v)
 		result.Variables[k] = v
 	}
+
+	// Configure AI provider from the workflow's ai: block if not already set
+	// explicitly via SetAIProvider. Steps may still run without a provider if
+	// no ai/ai_decide step is used; BuildProvider only fails if a config is
+	// present but a key is missing — in that case we record an error so the
+	// first ai step surfaces a clear message.
+	if e.aiProvider == nil && !wf.AI.IsZero() {
+		p, err := ai.BuildProvider(wf.AI)
+		if err != nil {
+			result.Status = "failed"
+			result.Error = err.Error()
+			return result
+		}
+		e.aiProvider = p
+	}
+	// Apply workflow-level AI defaults for steps to inherit.
+	e.aiModel = wf.AI.Model
+	if wf.AI.MaxTokens > 0 {
+		e.aiMaxTokens = wf.AI.MaxTokens
+	}
+	e.aiTemperature = wf.AI.Temperature
 
 	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", 0, "", nil)
 
@@ -710,6 +744,9 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 			if sr.Status == "failed" {
 				err = fmt.Errorf("%s", sr.Error)
 			}
+	case "ai":
+		output, err = e.execAI(step)
+		result.Nondeterministic = true
 	default:
 		err = fmt.Errorf("unknown action: %s", step.Action)
 	}

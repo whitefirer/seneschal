@@ -142,6 +142,14 @@ func ValidateStep(step Step, index int) []error {
 		if step.Do == nil || len(step.Do) == 0 {
 			errs = append(errs, fmt.Errorf("step[%d] (%s): foreach action requires 'do' steps", index, step.Name))
 		}
+	case "ai":
+		if step.Prompt == "" {
+			errs = append(errs, fmt.Errorf("step[%d] (%s): ai action requires 'prompt'", index, step.Name))
+		}
+	case "ai_decide":
+		if step.Question == "" {
+			errs = append(errs, fmt.Errorf("step[%d] (%s): ai_decide action requires 'question'", index, step.Name))
+		}
 	default:
 		errs = append(errs, fmt.Errorf("step[%d] (%s): unknown action '%s'", index, step.Name, step.Action))
 	}

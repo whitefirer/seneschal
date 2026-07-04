@@ -1,5 +1,13 @@
 package workflow
 
+import "goworkflow/workflow/ai"
+
+// AIConfig is the workflow-level AI configuration (the `ai:` block).
+// It is an alias for ai.Config so workflow YAML parsing reuses the same
+// tags. See ai.BuildProvider for how a provider is constructed from this
+// plus environment variables.
+type AIConfig = ai.Config
+
 // Step represents a single unit of work in a workflow.
 type Step struct {
 	Name           string            `yaml:"name"`
@@ -52,6 +60,15 @@ type Step struct {
 	ItemVar  string      `yaml:"item_var,omitempty"` // loop variable name, default: "item"
 	Do       []Step      `yaml:"do,omitempty"`
 
+	// AI action (action: "ai")
+	// Prompt is the user message; supports {{.var}} templates. By default only
+	// the variables referenced here are passed to the model (conservative
+	// default — override with Inputs).
+	Prompt   string   `yaml:"prompt,omitempty"`
+	System   string   `yaml:"system,omitempty"`   // optional system prompt
+	Inputs   []string `yaml:"inputs,omitempty"`   // explicit vars to expose to the model
+	Question string   `yaml:"question,omitempty"` // ai_decide: the question to answer true/false
+
 	// DAG support (依赖关系和下一节点)
 	Next       []string `yaml:"next,omitempty"`       // 指定下一节点列表（DAG模式）
 	DependsOn  []string `yaml:"depends_on,omitempty"` // 依赖的节点列表（DAG模式）
@@ -72,6 +89,10 @@ type Workflow struct {
 	Variables   map[string]string `yaml:"variables,omitempty"`
 	Mode        string            `yaml:"mode,omitempty"` // "linear" (默认, 顺序执行) 或 "dag" (DAG拓扑执行)
 	Steps       []Step            `yaml:"steps"`
+	// AI is the workflow-level AI provider configuration. API keys are NOT
+	// stored here (they come from environment variables at runtime) — see
+	// docs/PRODUCT.md "Provider 架构" and ai.BuildProvider.
+	AI AIConfig `yaml:"ai,omitempty"`
 }
 
 // StepResult holds the result of executing a single step.
