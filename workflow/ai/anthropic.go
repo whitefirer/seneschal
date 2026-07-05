@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -170,16 +171,167 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req Request) (Response
 	}, nil
 }
 
-// Stream is implemented in M2. For now it falls back to Complete, invoking
-// onToken once with the full text so callers coded against streaming still
-// work (just without incremental display).
+// Stream performs a streaming completion via Anthropic SSE.
+//
+// The Messages API is called with stream:true. The response is a sequence of
+// SSE events (lines prefixed with "data: "). Each event has a "type"; we
+// accumulate text from "content_block_delta" events (delta.text) and read
+// usage from "message_delta". The terminal "message_stop" event ends the
+// stream. onToken is invoked for each text delta as it arrives, enabling
+// token-by-token display.
+//
+// If onToken is nil, behavior is equivalent to Complete but still uses a
+// single streaming request (use Complete instead in that case).
 func (p *AnthropicProvider) Stream(ctx context.Context, req Request, onToken func(string)) (Response, error) {
-	resp, err := p.Complete(ctx, req)
+	if p.APIKey == "" {
+		return Response{}, fmt.Errorf("anthropic provider: API key is empty (set ANTHROPIC_API_KEY or DEEPSEEK_API_KEY)")
+	}
+
+	model := req.Model
+	if model == "" {
+		model = p.DefaultModel
+	}
+	if model == "" {
+		return Response{}, fmt.Errorf("anthropic provider: model is empty (set ai.model in the workflow or a default)")
+	}
+
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+
+	body := anthropicRequest{
+		Model:       model,
+		MaxTokens:   maxTokens,
+		Temperature: req.Temperature,
+		System:      req.System,
+		Messages: []anthropicMessage{
+			{Role: "user", Content: []anthropicContent{{Type: "text", Text: req.Prompt}}},
+		},
+		Stream: true,
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
-		return resp, err
+		return Response{}, fmt.Errorf("marshal request: %w", err)
 	}
-	if onToken != nil && resp.Text != "" {
-		onToken(resp.Text)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL()+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return Response{}, fmt.Errorf("create request: %w", err)
 	}
-	return resp, nil
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("x-api-key", p.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := p.httpClient().Do(httpReq)
+	if err != nil {
+		return Response{}, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return Response{}, fmt.Errorf("anthropic api error (status %d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	// Parse SSE: events are "event: <type>\ndata: <json>\n\n".
+	scanner := bufio.NewScanner(resp.Body)
+	// Anthropic lines can be long (especially with large tool calls); raise the
+	// per-line limit well above the default 64KB.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var out Response
+	var sb strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var ev streamEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			// Skip malformed lines rather than aborting the whole stream.
+			continue
+		}
+
+		switch ev.Type {
+		case "content_block_delta":
+			if ev.Delta != nil && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+				sb.WriteString(ev.Delta.Text)
+				if onToken != nil {
+					onToken(ev.Delta.Text)
+				}
+			}
+		case "message_delta":
+			if ev.Delta != nil && ev.Delta.StopReason != "" {
+				out.StopReason = ev.Delta.StopReason
+			}
+			// message_delta may carry final usage (output_tokens) on some
+			// providers; the initial message_start carries input_tokens.
+			if ev.Usage != nil {
+				if ev.Usage.OutputTokens > 0 {
+					out.OutputTokens = ev.Usage.OutputTokens
+				}
+			}
+		case "message_start":
+			// message_start wraps the message object with usage.input_tokens.
+			if ev.Message != nil && ev.Message.Usage != nil {
+				out.InputTokens = ev.Message.Usage.InputTokens
+				out.OutputTokens = ev.Message.Usage.OutputTokens
+			}
+		case "message_stop":
+			// Terminal event; stop reading.
+			out.Text = sb.String()
+			return out, nil
+		case "error":
+			em := ev.Error
+			if em == nil {
+				em = &streamError{Message: "unknown stream error"}
+			}
+			return Response{}, fmt.Errorf("anthropic stream error: %s", em.Message)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return Response{}, fmt.Errorf("read stream: %w", err)
+	}
+
+	out.Text = sb.String()
+	return out, nil
+}
+
+// streamEvent is a union over the SSE event types emitted by the Messages API.
+// Only the fields relevant to text accumulation are modeled; extra fields are
+// ignored by json.Unmarshal.
+type streamEvent struct {
+	Type    string        `json:"type"`
+	Delta   *streamDelta  `json:"delta,omitempty"`
+	Usage   *streamUsage  `json:"usage,omitempty"`
+	Message *streamMessage `json:"message,omitempty"`
+	Error   *streamError  `json:"error,omitempty"`
+}
+
+type streamDelta struct {
+	Type       string `json:"type"`        // "text_delta"
+	Text       string `json:"text"`
+	StopReason string `json:"stop_reason"` // present on message_delta
+}
+
+type streamUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
+
+type streamMessage struct {
+	Usage *streamUsage `json:"usage,omitempty"`
+}
+
+type streamError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
