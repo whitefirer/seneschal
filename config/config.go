@@ -18,15 +18,20 @@ type ServerConfig struct {
 	Host           string   `yaml:"host"`
 	Port           string   `yaml:"port"`
 	WorkflowsDir   string   `yaml:"workflows_dir"`
+	// ExecutionsDir is where execution history snapshots are persisted.
+	// Defaults to "./executions". Contains potentially sensitive data and is
+	// gitignored — do not commit this directory.
+	ExecutionsDir  string   `yaml:"executions_dir"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // Default returns a config with safe defaults.
 func Default() *ServerConfig {
 	return &ServerConfig{
-		Host:         "127.0.0.1",
-		Port:         "8888",
-		WorkflowsDir: "./workflows/user",
+		Host:          "127.0.0.1",
+		Port:          "8888",
+		WorkflowsDir:  "./workflows/user",
+		ExecutionsDir: "./executions",
 		AllowedOrigins: []string{
 			"http://localhost:8888",
 			"http://localhost:5173",

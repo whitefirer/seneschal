@@ -13,6 +13,7 @@ import (
 	"goworkflow/api"
 	"goworkflow/config"
 	"goworkflow/web"
+	"goworkflow/workflow"
 )
 
 var staticFiles = web.StaticFiles
@@ -67,12 +68,25 @@ func main() {
 		}
 	}
 
+	// Resolve executions directory (for persisted history)
+	executionsDir := cfg.ExecutionsDir
+	if executionsDir == "" {
+		executionsDir = "./executions"
+	}
+	if !filepath.IsAbs(executionsDir) {
+		if wd, err := os.Getwd(); err == nil {
+			executionsDir = filepath.Join(wd, executionsDir)
+		}
+	}
+
 	// Create WebSocket hub
 	hub := api.NewWSHub()
 	go hub.Run()
 
-	// Create API handler
-	handler := api.NewHandler(hub, workflowsDir, cfg.CheckOrigin())
+	// Create API handler with a file-backed execution store so history
+	// survives restarts.
+	store := workflow.NewFileStore(executionsDir)
+	handler := api.NewHandler(hub, workflowsDir, store, cfg.CheckOrigin())
 
 	// Setup routes using gorilla/mux
 	r := mux.NewRouter()

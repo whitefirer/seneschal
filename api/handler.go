@@ -26,21 +26,91 @@ var defaultUpgrader = websocket.Upgrader{
 type Handler struct {
 	hub          *WSHub
 	workflowsDir string
+	store        workflow.ExecutionStore
 	upgrader     websocket.Upgrader
 	executions   map[string]*ExecutionDetail
 	execMu       sync.RWMutex
 }
 
-// NewHandler creates a new API handler
-func NewHandler(hub *WSHub, workflowsDir string, checkOrigin func(r *http.Request) bool) *Handler {
+// maxInMemoryExecutions caps the in-memory execution cache. Older entries are
+// evicted (but remain on disk) to bound memory use in long-running servers.
+const maxInMemoryExecutions = 100
+
+// NewHandler creates a new API handler. store may be nil to disable
+// persistence (history lives only in memory, lost on restart).
+func NewHandler(hub *WSHub, workflowsDir string, store workflow.ExecutionStore, checkOrigin func(r *http.Request) bool) *Handler {
 	upgrader := defaultUpgrader
 	upgrader.CheckOrigin = checkOrigin
-	return &Handler{
+	h := &Handler{
 		hub:          hub,
 		workflowsDir: workflowsDir,
+		store:        store,
 		upgrader:     upgrader,
 		executions:   make(map[string]*ExecutionDetail),
 	}
+	// Warm the in-memory cache from the store (most recent first), so history
+	// is visible immediately after a restart.
+	if store != nil {
+		h.warmCache()
+	}
+	return h
+}
+
+// warmCache loads the most recent executions from the store into memory.
+func (h *Handler) warmCache() {
+	summaries, err := h.store.List()
+	if err != nil {
+		return
+	}
+	for _, s := range summaries {
+		if len(h.executions) >= maxInMemoryExecutions {
+			break
+		}
+		snap, err := h.store.Get(s.ID)
+		if err != nil {
+			continue
+		}
+		h.executions[s.ID] = snapshotToDetail(snap)
+	}
+}
+
+// snapshotToDetail converts a stored ExecutionSnapshot into the in-memory
+// ExecutionDetail used by the API. For warm-cache we only need the record +
+// steps; logs are not persisted.
+func snapshotToDetail(snap workflow.ExecutionSnapshot) *ExecutionDetail {
+	return &ExecutionDetail{
+		ExecutionRecord: ExecutionRecord{
+			ID:           snap.ID,
+			WorkflowName: snap.WorkflowName,
+			WorkflowFile: snap.WorkflowFile,
+			Status:       snap.Status,
+			StartTime:    snap.StartTime,
+			EndTime:      snap.EndTime,
+			Duration:     snap.Duration,
+			Error:        snap.Error,
+			StepsCount:   snap.StepsCount,
+		},
+		Logs:     []LogEntry{},
+		Steps:    snap.Steps,
+		Workflow: snap.WorkflowName,
+	}
+}
+
+// evictOldest removes the oldest in-memory execution if the cache is full.
+// Caller must hold h.execMu.
+func (h *Handler) evictOldest() {
+	if len(h.executions) < maxInMemoryExecutions {
+		return
+	}
+	var oldestID string
+	var oldestStart string
+	for id, e := range h.executions {
+		if oldestID == "" || e.StartTime < oldestStart {
+			oldestID = id
+			oldestStart = e.StartTime
+		}
+	}
+	delete(h.executions, oldestID)
 }
 
 // success returns a success response
@@ -502,6 +572,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.execMu.Lock()
+	h.evictOldest()
 	h.executions[executionID] = exec
 	h.execMu.Unlock()
 
@@ -852,6 +923,41 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			Error:        result.Error,
 			Timestamp:    result.EndTime,
 		})
+
+		// Persist the completed execution so it survives restarts and can be
+		// replayed later. Done under execMu (still held via defer above).
+		if h.store != nil {
+			// Reuse the in-memory detail (already duration-computed) when
+			// available; otherwise derive from the result.
+			dur := ""
+			if e, ok := h.executions[executionID]; ok {
+				dur = e.Duration
+			}
+			snap := workflow.ExecutionSnapshot{
+				ExecutionSummary: workflow.ExecutionSummary{
+					ID:               executionID,
+					WorkflowName:     wf.Name,
+					WorkflowFile:     strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml"),
+					Status:           result.Status,
+					StartTime:        result.StartTime,
+					EndTime:          result.EndTime,
+					Duration:         dur,
+					Error:            result.Error,
+					StepsCount:       len(wf.Steps),
+					Nondeterministic: result.Nondeterministic,
+				},
+				Steps:     result.Steps,
+				Variables: result.Variables,
+			}
+			// Store the original workflow YAML so replays can rebuild the exact
+			// definition even if the file has changed since.
+			if raw, rerr := os.ReadFile(path); rerr == nil {
+				snap.Workflow = string(raw)
+			}
+			// Persist best-effort: a save failure should not fail the request,
+			// which has already returned. Log and move on.
+			_ = h.store.Save(snap)
+		}
 	}()
 
 	writeJSON(w, http.StatusOK, success(map[string]string{
@@ -868,11 +974,36 @@ func (h *Handler) GetExecutions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.execMu.RLock()
-	defer h.execMu.RUnlock()
-
 	var executions []ExecutionRecord
 	for _, e := range h.executions {
 		executions = append(executions, e.ExecutionRecord)
+	}
+	h.execMu.RUnlock()
+
+	// Merge in on-disk history not present in memory (so the listing covers
+	// evicted and pre-restart entries too).
+	if h.store != nil {
+		if summaries, err := h.store.List(); err == nil {
+			seen := make(map[string]bool, len(executions))
+			for _, e := range executions {
+				seen[e.ID] = true
+			}
+			for _, s := range summaries {
+				if !seen[s.ID] {
+					executions = append(executions, ExecutionRecord{
+						ID:           s.ID,
+						WorkflowName: s.WorkflowName,
+						WorkflowFile: s.WorkflowFile,
+						Status:       s.Status,
+						StartTime:    s.StartTime,
+						EndTime:      s.EndTime,
+						Duration:     s.Duration,
+						Error:        s.Error,
+						StepsCount:   s.StepsCount,
+					})
+				}
+			}
+		}
 	}
 
 	// Sort by start time (newest first)
@@ -901,10 +1032,16 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.execMu.RLock()
-	defer h.execMu.RUnlock()
-
 	exec, ok := h.executions[id]
+	h.execMu.RUnlock()
 	if !ok {
+		// Fall back to the store for evicted / pre-restart history.
+		if h.store != nil {
+			if snap, serr := h.store.Get(id); serr == nil {
+				writeJSON(w, http.StatusOK, success(snapshotToDetail(snap)))
+				return
+			}
+		}
 		writeJSON(w, http.StatusNotFound, errorResp("Execution not found"))
 		return
 	}
