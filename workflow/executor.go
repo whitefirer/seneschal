@@ -213,6 +213,45 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 	}
 }
 
+// sendAIToken emits an incremental AI token event. Unlike sendEvent, the
+// token text is carried through to the TUI channel (so the detail view can
+// append incrementally), not dropped. Used by the "ai" action in streaming
+// (TUI) mode.
+func (e *Executor) sendAIToken(name, stepID, action string, depth int, parentID, token string) {
+	if e.OnProgress != nil {
+		e.OnProgress(ProgressEvent{
+			Type:     "ai_token",
+			Name:     name,
+			StepId:   stepID,
+			Action:   action,
+			Status:   "running",
+			Output:   token,
+			Depth:    depth,
+			ParentId: parentID,
+			Time:     Now(),
+		})
+	}
+	// TUI channel: include Output (the token) so the detail view can append.
+	if e.realtimePrinter != nil {
+		ev := ProgressEvent{
+			Type:     "ai_token",
+			StepId:   stepID,
+			Depth:    depth,
+			ParentId: parentID,
+			StepName: name,
+			Action:   action,
+			Status:   "running",
+			Output:   token,
+		}
+		if ch := e.realtimePrinter.EventCh; ch != nil {
+			select {
+			case ch <- ev:
+			default:
+			}
+		}
+	}
+}
+
 // Execute runs a workflow and returns the result.
 // Execute runs the workflow.
 func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
@@ -745,7 +784,7 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 				err = fmt.Errorf("%s", sr.Error)
 			}
 	case "ai":
-		output, err = e.execAI(step)
+		output, err = e.execAI(step, stepID, depth, parentID)
 		result.Nondeterministic = true
 	default:
 		err = fmt.Errorf("unknown action: %s", step.Action)

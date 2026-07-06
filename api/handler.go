@@ -572,6 +572,11 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			LogLevel:        logLevel,
 			ConditionResult: event.ConditionResult,
 		})
+		// Note: "ai_token" events (streaming LLM tokens) are forwarded above as
+		// a generic WSProgressEvent so the frontend can render them incrementally
+		// (Phase 5). They are intentionally NOT appended to e.Logs below — per-
+		// token log entries would flood the log; the final step_output carries
+		// the complete text.
 
 		// Store logs and update step status in real-time
 		h.execMu.Lock()

@@ -42,6 +42,23 @@ func (s *stateStore) put(e ProgressEvent) {
 	if e.StepName != "" {
 		nm = e.StepName
 	}
+	// ai_token is an incremental event: append the token to the step's output
+	// rather than overwriting it, so the detail view shows streaming text.
+	if e.Type == "ai_token" {
+		if r, ok := s.m[k]; ok {
+			r.output += e.Output
+			return
+		}
+		// First token before step_start registered the row: create it.
+		s.m[k] = &stepRec{
+			stepId: k, name: nm, action: e.Action,
+			status: "running", output: e.Output,
+			depth: e.Depth, parentId: e.ParentId,
+			order: len(s.keys),
+		}
+		s.keys = append(s.keys, k)
+		return
+	}
 	if r, ok := s.m[k]; ok {
 		r.status = e.Status
 		r.dur = e.Duration

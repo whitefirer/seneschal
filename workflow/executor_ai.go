@@ -44,10 +44,11 @@ func extractInputs(promptText string, stepInputs []string, allVars map[string]st
 	return inputs
 }
 
-// execAI runs the "ai" action: a non-streaming (M1) text completion. The
-// generated text is stored via step.SaveOutput (if set) and returned as the
-// step output.
-func (e *Executor) execAI(step Step) (string, error) {
+// execAI runs the "ai" action. In TUI mode (realtimePrinter set) it streams
+// tokens and emits ai_token events for incremental display; otherwise it
+// completes non-streaming and returns the full text. The generated text is
+// stored via step.SaveOutput (if set) and returned as the step output.
+func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) (string, error) {
 	if e.aiProvider == nil {
 		return "", fmt.Errorf("ai step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
 	}
@@ -75,11 +76,20 @@ func (e *Executor) execAI(step Step) (string, error) {
 	}
 
 	// A per-step timeout keeps a runaway model from blocking the workflow.
-	// Default 120s; M1 does not expose a per-step override yet.
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	resp, err := e.aiProvider.Complete(ctx, req)
+	// TUI mode: stream token-by-token, emitting ai_token events so the detail
+	// view can render incrementally. Non-TUI: a single Complete call (avoids
+	// per-token logging noise in CI/plain output).
+	var resp ai.Response
+	if e.realtimePrinter != nil {
+		resp, err = e.aiProvider.Stream(ctx, req, func(token string) {
+			e.sendAIToken(step.Name, stepID, step.Action, depth, parentID, token)
+		})
+	} else {
+		resp, err = e.aiProvider.Complete(ctx, req)
+	}
 	if err != nil {
 		return "", fmt.Errorf("ai step '%s': %w", step.Name, err)
 	}
