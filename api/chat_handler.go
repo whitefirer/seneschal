@@ -108,36 +108,79 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If nothing matched, tell the client.
+	// If nothing matched, tell the client and suggest creating one.
 	if sel.Workflow == "" {
 		sendEvent("selection", map[string]interface{}{
-			"workflow":   "",
-			"variables":  map[string]string{},
-			"confidence": 0,
-			"available":  candidateNames(candidates),
+			"workflow":    "",
+			"variables":   map[string]string{},
+			"confidence":  0,
+			"available":   candidateNames(candidates),
+			"suggestCreate": true, // frontend offers a "generate" option
 		})
 		sendEvent("done", map[string]bool{"ok": true})
 		return
 	}
 
-	// Load the chosen workflow to include its step summary in the response so
-	// the UI can show a preview without a second round-trip.
-	var stepSummary []map[string]string
+	// Load the chosen workflow to include its step summary + structure in the
+	// response so the UI can show a preview / DAG without a second round-trip.
+	var stepSummary []map[string]interface{}
+	var fileName string
 	if wf, _, gerr := registry.Get(sel.Workflow); gerr == nil {
-		for _, s := range wf.Steps {
-			stepSummary = append(stepSummary, map[string]string{
-				"name": s.Name, "action": s.Action,
-			})
+		// Find the file name for this workflow (needed by /run which matches
+		// by file name, not YAML name field).
+		for _, e := range entries {
+			if e.Name == sel.Workflow {
+				fileName = e.FileName
+				break
+			}
 		}
+		stepSummary = buildStepSummary(wf.Steps)
 	}
 
 	sendEvent("selection", map[string]interface{}{
 		"workflow":   sel.Workflow,
+		"fileName":   fileName, // for the /run API which matches by file name
 		"variables":  sel.Variables,
 		"confidence": sel.Confidence,
 		"steps":      stepSummary,
 	})
 	sendEvent("done", map[string]bool{"ok": true})
+}
+
+// buildStepSummary flattens the step tree into a list of step descriptors
+// including structural fields (next, depends_on, then/else branch presence,
+// foreach items, parallel children) so the frontend can render a DAG preview
+// or mermaid graph without a second API call.
+func buildStepSummary(steps []workflow.Step) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(steps))
+	for _, s := range steps {
+		entry := map[string]interface{}{
+			"name":   s.Name,
+			"action": s.Action,
+		}
+		if len(s.Next) > 0 {
+			entry["next"] = s.Next
+		}
+		if len(s.DependsOn) > 0 {
+			entry["depends_on"] = s.DependsOn
+		}
+		if s.Action == "condition" {
+			if len(s.Then) > 0 {
+				entry["then"] = buildStepSummary(s.Then)
+			}
+			if len(s.Else) > 0 {
+				entry["else"] = buildStepSummary(s.Else)
+			}
+		}
+		if (s.Action == "foreach" || s.Action == "loop") && len(s.Do) > 0 {
+			entry["do"] = buildStepSummary(s.Do)
+		}
+		if s.Action == "parallel" && len(s.Steps) > 0 {
+			entry["steps"] = buildStepSummary(s.Steps)
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func candidateNames(cs []ai.CandidateEntry) []string {
