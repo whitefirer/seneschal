@@ -100,6 +100,8 @@ func main() {
 	r.HandleFunc("/api/workflows/{name}/run", handler.RunWorkflow).Methods("POST")
 	r.HandleFunc("/api/executions", handler.GetExecutions).Methods("GET")
 	r.HandleFunc("/api/executions/{id}", handler.GetExecution).Methods("GET")
+	r.HandleFunc("/api/executions/{id}", handler.DeleteExecution).Methods("DELETE")
+	r.HandleFunc("/api/executions/{id}/replay", handler.ReplayExecution).Methods("POST")
 	r.HandleFunc("/api/ws", handler.WSHandler)
 
 	// Static files - SPA with fallback to index.html

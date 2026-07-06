@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"goworkflow/workflow"
+	"goworkflow/workflow/ai"
 )
 
 var defaultUpgrader = websocket.Upgrader{
@@ -1047,6 +1048,162 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, success(exec))
+}
+
+// ReplayExecution re-runs a historical execution: deterministic steps reuse
+// recorded output, AI steps re-execute. POST /api/executions/{id}/replay.
+// Returns a new executionId for the replay run.
+func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+	if h.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResp("Execution store not configured"))
+		return
+	}
+	id := mux.Vars(r)["id"]
+	snap, err := h.store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, errorResp("Execution not found"))
+		return
+	}
+	if snap.Workflow == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("Snapshot has no stored workflow YAML"))
+		return
+	}
+	wf, err := workflow.Parse([]byte(snap.Workflow))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResp("Rebuild workflow: "+err.Error()))
+		return
+	}
+
+	// Determine replay options from query string: ?full=true, ?step=name
+	opts := workflow.ReplayOptions{
+		Full:      r.URL.Query().Get("full") == "true",
+		OnlySteps: r.URL.Query()["step"],
+	}
+
+	// Generate a new execution ID for the replay run.
+	replayID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHex(4))
+
+	// Build the executor with the replay cache and an AI provider (from env,
+	// so AI steps can re-run). The provider is best-effort: a workflow with
+	// no AI steps needs none.
+	executor := workflow.NewExecutor(snap.Variables)
+	if !opts.Full {
+		cache := buildAPIReplayCache(snap.Steps, opts)
+		executor.SetReplayCache(cache)
+	}
+	if p, perr := ai.BuildProvider(ai.Config{}); perr == nil {
+		executor.SetAIProvider(p)
+	}
+
+	// Broadcast start.
+	wfFile := strings.TrimSuffix(strings.TrimSuffix(snap.WorkflowFile, ".yaml"), ".yml")
+	h.hub.Broadcast(WSProgressEvent{
+		Type: "workflow_start", ExecutionID: replayID,
+		WorkflowName: wf.Name, WorkflowFile: wfFile,
+		Timestamp: workflow.Now(),
+	})
+
+	writeJSON(w, http.StatusOK, success(map[string]string{
+		"executionId": replayID,
+		"replayOf":    id,
+		"status":      "started",
+	}))
+
+	// Run in background, broadcasting progress like RunWorkflow does.
+	go func() {
+		result := executor.Execute(wf)
+		h.hub.Broadcast(WSProgressEvent{
+			Type: "workflow_end", ExecutionID: replayID,
+			WorkflowName: wf.Name, WorkflowFile: wfFile,
+			Status: result.Status, Error: result.Error,
+			Timestamp: result.EndTime,
+		})
+		hits, misses := executor.ReplayStats()
+		// Persist the replay run too.
+		if h.store != nil {
+			_ = h.store.Save(workflow.ExecutionSnapshot{
+				ExecutionSummary: workflow.ExecutionSummary{
+					ID:               replayID,
+					WorkflowName:     wf.Name,
+					WorkflowFile:     wfFile,
+					Status:           result.Status,
+					StartTime:        result.StartTime,
+					EndTime:          result.EndTime,
+					Error:            result.Error,
+					StepsCount:       len(wf.Steps),
+					Nondeterministic: result.Nondeterministic,
+				},
+				Steps:     result.Steps,
+				Variables: result.Variables,
+				Workflow:  snap.Workflow,
+			})
+		}
+		// Log the reuse/re-exec summary via a WS event for visibility.
+		h.hub.Broadcast(WSProgressEvent{
+			Type: "step_output", ExecutionID: replayID,
+			Output:   fmt.Sprintf("replay: %d reused, %d re-executed", hits, misses),
+			Timestamp: workflow.Now(),
+		})
+	}()
+}
+
+// DeleteExecution removes a single execution from the store (and memory).
+// DELETE /api/executions/{id}.
+func (h *Handler) DeleteExecution(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
+		return
+	}
+	if h.store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResp("Execution store not configured"))
+		return
+	}
+	id := mux.Vars(r)["id"]
+	if err := h.store.Delete(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+		return
+	}
+	h.execMu.Lock()
+	delete(h.executions, id)
+	h.execMu.Unlock()
+	writeJSON(w, http.StatusOK, success(map[string]string{"deleted": id}))
+}
+
+// buildAPIReplayCache mirrors workflow.buildReplayCache but is duplicated in
+// the api package because the workflow helper is unexported. It flattens the
+// historical step tree into a cache keyed by ID then Name.
+func buildAPIReplayCache(steps []workflow.StepResult, opts workflow.ReplayOptions) map[string]*workflow.StepResult {
+	cache := make(map[string]*workflow.StepResult)
+	onlySet := make(map[string]bool, len(opts.OnlySteps))
+	for _, s := range opts.OnlySteps {
+		onlySet[s] = true
+	}
+	var walk func([]workflow.StepResult)
+	walk = func(ss []workflow.StepResult) {
+		for i := range ss {
+			sr := &ss[i]
+			if len(opts.OnlySteps) > 0 && (onlySet[sr.Name] || onlySet[sr.ID]) {
+				continue
+			}
+			if sr.ID != "" {
+				cache[sr.ID] = sr
+			}
+			if sr.Name != "" {
+				if _, ok := cache[sr.Name]; !ok {
+					cache[sr.Name] = sr
+				}
+			}
+			walk(sr.Children)
+			walk(sr.ThenChildren)
+			walk(sr.ElseChildren)
+		}
+	}
+	walk(steps)
+	return cache
 }
 
 // WSHandler handles WebSocket connections
