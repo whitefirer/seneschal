@@ -50,6 +50,15 @@ func (c *Context) Get(key string) string {
 	return c.Variables[key]
 }
 
+// GetOK retrieves a variable and reports whether it was set. Useful when an
+// empty string is a legitimate value that should not be overwritten.
+func (c *Context) GetOK(key string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.Variables[key]
+	return v, ok
+}
+
 // SetResult stores a step result.
 func (c *Context) SetResult(key, value string) {
 	c.mu.Lock()

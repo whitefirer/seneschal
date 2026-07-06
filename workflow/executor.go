@@ -262,9 +262,16 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		Variables: make(map[string]string),
 	}
 
-	// Copy initial variables
+	// Initialize variables: workflow YAML defaults first, then the executor's
+	// preset variables (from NewExecutor / --var / chat) override them. This
+	// gives explicit user/AI-supplied values priority over YAML defaults —
+	// previously Execute() clobbered NewExecutor's vars with wf.Variables.
 	for k, v := range wf.Variables {
-		e.context.Set(k, v)
+		if _, preset := e.context.GetOK(k); !preset {
+			e.context.Set(k, v)
+		}
+	}
+	for k, v := range e.context.Snapshot() {
 		result.Variables[k] = v
 	}
 
