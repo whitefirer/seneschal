@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -66,10 +67,21 @@ func BuildProvider(cfg Config) (Provider, error) {
 		if env := os.Getenv("ANTHROPIC_BASE_URL"); env != "" {
 			baseURL = env
 		}
+		model := cfg.Model
+		if model == "" {
+			// Fall back to a sensible default. Pick based on the resolved base
+			// URL: DeepSeek's endpoint -> deepseek-chat, otherwise Claude's
+			// latest Sonnet. Users override via Config.Model.
+			if isDeepSeekEndpoint(baseURL) {
+				model = "deepseek-chat"
+			} else {
+				model = "claude-sonnet-4-5-20250929"
+			}
+		}
 		return &AnthropicProvider{
 			BaseURL:      baseURL,
 			APIKey:       apiKey,
-			DefaultModel: cfg.Model,
+			DefaultModel: model,
 			HTTPClient: &http.Client{
 				Timeout: 120 * time.Second, // generous default for model latency
 			},
@@ -86,4 +98,12 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// isDeepSeekEndpoint reports whether baseURL points at DeepSeek (whose
+// Anthropic-compatible endpoint is api.deepseek.com/anthropic). Used to pick a
+// sensible default model when Config.Model is empty.
+func isDeepSeekEndpoint(baseURL string) bool {
+	return baseURL == "" || // empty = provider default = DeepSeek
+		strings.Contains(baseURL, "deepseek.com")
 }
