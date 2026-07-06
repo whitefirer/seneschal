@@ -54,11 +54,36 @@ type Executor struct {
 	aiModel       string
 	aiMaxTokens   int
 	aiTemperature float64
+	// Replay cache (Phase 4): maps step ID (or Name fallback) to a stored
+	// StepResult. When non-nil, executeStep returns the cached result for
+	// deterministic steps instead of re-executing them. AI / nondeterministic
+	// steps are never served from cache — they always re-run. Set via
+	// SetReplayCache; nil means normal execution (no replay).
+	replayCache map[string]*StepResult
+	// replayStats tracks how many steps were served from cache vs re-executed,
+	// for the replay summary. Reset when SetReplayCache is called.
+	replayedHits   int
+	replayedMisses int
 }
 
 // SetAIProvider configures the LLM provider used by ai/ai_decide steps.
 // If not called, Execute() builds one from the workflow's ai: config (if any).
 func (e *Executor) SetAIProvider(p ai.Provider) { e.aiProvider = p }
+
+// SetReplayCache enables replay mode: deterministic steps present in the cache
+// are served from it instead of re-executing. Pass nil to disable replay.
+func (e *Executor) SetReplayCache(cache map[string]*StepResult) {
+	e.replayCache = cache
+	e.replayedHits = 0
+	e.replayedMisses = 0
+}
+
+// ReplayStats returns (hits, misses) — how many steps were served from the
+// replay cache vs actually executed. Meaningful only after a run with
+// SetReplayCache enabled.
+func (e *Executor) ReplayStats() (hits, misses int) {
+	return e.replayedHits, e.replayedMisses
+}
 
 // SetStepCallback sets a callback invoked after each step completes.
 func (e *Executor) SetStepCallback(cb StepCallback) {
@@ -741,6 +766,32 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 		result.Output = "(dry run)"
 		result.EndTime = Now()
 		return result
+	}
+
+	// Replay: if a cache is configured and this deterministic step has a stored
+	// result, serve it directly. Nondeterministic steps (AI and their tainted
+	// downstream) always re-run — that is the whole point of smart replay.
+	// The cached result keeps its original output/error/status so downstream
+	// variable substitution behaves identically.
+	if e.replayCache != nil {
+		var cached *StepResult
+		if c, ok := e.replayCache[stepID]; ok {
+			cached = c
+		} else if c, ok := e.replayCache[step.Name]; ok {
+			cached = c
+		}
+		if cached != nil && !cached.Nondeterministic && cached.Status != "" {
+			// Hit: restore the stored result, preserving its determinism flags.
+			e.replayedHits++
+			c := *cached
+			c.StartTime = startTime
+			c.EndTime = Now()
+			// Re-emit events so UIs/WS see the step "run" (start + complete).
+			e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, parentID, nil)
+			e.sendEvent("step_complete", step.Name, stepID, step.Action, c.Status, c.Output, c.Duration, depth, parentID, c.ConditionResult)
+			return c
+		}
+		e.replayedMisses++
 	}
 
 	var err error
