@@ -35,6 +35,9 @@ func main() {
 	if p := config.PortFlag(); p != "" {
 		cfg.Port = p
 	}
+	if h := config.HostFlag(); h != "" {
+		cfg.Host = h
+	}
 
 	// Resolve workflows directory
 	workflowsDir := cfg.WorkflowsDir
@@ -102,6 +105,7 @@ func main() {
 	r.HandleFunc("/api/executions/{id}", handler.GetExecution).Methods("GET")
 	r.HandleFunc("/api/executions/{id}", handler.DeleteExecution).Methods("DELETE")
 	r.HandleFunc("/api/executions/{id}/replay", handler.ReplayExecution).Methods("POST")
+	r.HandleFunc("/api/executions/{id}/ask", handler.AskExecution).Methods("POST")
 	r.HandleFunc("/api/chat", handler.ChatHandler).Methods("POST")
 	r.HandleFunc("/api/ws", handler.WSHandler)
 
@@ -141,7 +145,13 @@ func main() {
 	fmt.Printf("  ║     goworkflow Web UI Server              ║\n")
 	fmt.Printf("  ╚═══════════════════════════════════════════╝\n")
 	fmt.Printf("\n")
-	fmt.Printf("  🌐 Server:  http://localhost%s\n", addr)
+	// Display URL: for 0.0.0.0 show localhost (most useful), otherwise the
+	// actual host so users know how to reach it.
+	displayHost := cfg.Host
+	if displayHost == "0.0.0.0" || displayHost == "" {
+		displayHost = "localhost"
+	}
+	fmt.Printf("  🌐 Server:  http://%s:%s\n", displayHost, cfg.Port)
 	fmt.Printf("  📁 Workflows: %s\n", workflowsDir)
 	fmt.Printf("  📋 Config: %s\n", configPath)
 	if len(cfg.AllowedOrigins) > 0 {

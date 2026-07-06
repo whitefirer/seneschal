@@ -125,7 +125,10 @@ export interface ChatSelection {
 }
 
 export interface ChatSSEEvent {
-  type: 'thinking' | 'selection' | 'done' | 'error'
+  // SSE event types from /api/chat (thinking/selection/done/error) and
+  // /api/executions/{id}/ask (thinking/token/done/error). Kept as string so
+  // new event types don't require a type change.
+  type: string
   [key: string]: any
 }
 
@@ -185,8 +188,48 @@ function parseSSE(raw: string): ChatSSEEvent | null {
   }
   if (!dataStr) return null
   try {
-    return { type: eventType as ChatSSEEvent['type'], ...JSON.parse(dataStr) }
+    return { type: eventType, ...JSON.parse(dataStr) }
   } catch {
-    return { type: eventType as ChatSSEEvent['type'], raw: dataStr }
+    return { type: eventType, raw: dataStr }
   }
+}
+
+export const askApi = {
+  // askExecution POSTs a question about a specific execution and streams the
+  // AI answer back. Same SSE parsing as chatApi.
+  askExecution: async (
+    executionId: string,
+    question: string,
+    onEvent: (event: ChatSSEEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch(`/api/executions/${executionId}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+      signal,
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`ask request failed: ${res.status}`)
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        const event = parseSSE(raw)
+        if (event) onEvent(event)
+      }
+    }
+    if (buffer.trim()) {
+      const event = parseSSE(buffer)
+      if (event) onEvent(event)
+    }
+  },
 }

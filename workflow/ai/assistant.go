@@ -250,3 +250,119 @@ func (a *Assistant) Fix(ctx context.Context, yamlContent, validationError string
 	}
 	return fixed, nil
 }
+
+// ExecutionStepResult is the assistant's view of a completed step. It mirrors
+// the fields the model needs to reason about an execution (status, output,
+// error, determinism). Callers convert from workflow.StepResult since ai
+// cannot import workflow.
+type ExecutionStepResult struct {
+	Name            string
+	Action          string
+	Status          string
+	Output          string
+	Error           string
+	Duration        string
+	Nondeterministic bool
+	Children        []ExecutionStepResult
+}
+
+// ExecutionView is the assistant's view of a completed or in-progress
+// execution, for ExplainExecution / AnswerExecutionQuestion.
+type ExecutionView struct {
+	WorkflowName   string
+	Status         string
+	Error          string
+	Variables      map[string]string
+	Steps          []ExecutionStepResult
+	Nondeterministic bool
+}
+
+// ExplainExecution produces a Chinese summary of an execution: overall result,
+// notable steps, failures, and AI-influenced branches.
+func (a *Assistant) ExplainExecution(ctx context.Context, ex ExecutionView) (string, error) {
+	if a.provider == nil {
+		return "", fmt.Errorf("assistant: no AI provider configured")
+	}
+	system := actionSchemaDoc + "\n\n你是一个工作流执行分析助手。用户会给你一个执行结果,你要帮他们理解。"
+	req := Request{
+		System: system,
+		Prompt: fmt.Sprintf(
+			"请用中文分析下面这次工作流执行。先一句话概括结果(成功/失败),然后挑值得注意的步骤说明(失败的、AI 相关的、耗时长)。简洁,markdown 列表。\n\n"+
+				"执行状态: %s\n错误: %s\n包含 AI 步骤: %v\n变量: %s\n\n步骤树:\n%s",
+			ex.Status, ex.Error, ex.Nondeterministic, formatVars(ex.Variables), formatStepTree(ex.Steps, 0)),
+	}
+	resp, err := a.provider.Complete(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("explain execution: %w", err)
+	}
+	return strings.TrimSpace(resp.Text), nil
+}
+
+// AnswerExecutionQuestion answers a free-form question about an execution
+// (e.g. "why did step X fail?", "what does variable Y contain?").
+func (a *Assistant) AnswerExecutionQuestion(ctx context.Context, ex ExecutionView, question string) (string, error) {
+	if a.provider == nil {
+		return "", fmt.Errorf("assistant: no AI provider configured")
+	}
+	system := actionSchemaDoc + "\n\n你是一个工作流执行分析助手。根据执行结果回答用户的问题,用中文,简洁。"
+	req := Request{
+		System: system,
+		Prompt: fmt.Sprintf(
+			"执行状态: %s\n错误: %s\n变量: %s\n\n步骤树:\n%s\n\n用户问题: %s",
+			ex.Status, ex.Error, formatVars(ex.Variables), formatStepTree(ex.Steps, 0), question),
+	}
+	resp, err := a.provider.Complete(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("answer execution question: %w", err)
+	}
+	return strings.TrimSpace(resp.Text), nil
+}
+
+func formatVars(vars map[string]string) string {
+	if len(vars) == 0 {
+		return "(无)"
+	}
+	var sb strings.Builder
+	for k, v := range vars {
+		val := v
+		if len(val) > 200 {
+			val = val[:200] + "...(截断)"
+		}
+		fmt.Fprintf(&sb, "  %s = %s\n", k, val)
+	}
+	return sb.String()
+}
+
+func formatStepTree(steps []ExecutionStepResult, depth int) string {
+	var sb strings.Builder
+	indent := strings.Repeat("  ", depth)
+	for _, s := range steps {
+		flag := ""
+		if s.Nondeterministic {
+			flag = " [AI]"
+		}
+		fmt.Fprintf(&sb, "%s- [%s] %s (%s)%s", indent, s.Status, s.Name, s.Action, flag)
+		if s.Duration != "" {
+			fmt.Fprintf(&sb, " %s", s.Duration)
+		}
+		if s.Error != "" {
+			errMsg := s.Error
+			if len(errMsg) > 300 {
+				errMsg = errMsg[:300] + "...(截断)"
+			}
+			fmt.Fprintf(&sb, "\n%s  错误: %s", indent, errMsg)
+		}
+		if s.Output != "" {
+			out := s.Output
+			if len(out) > 500 {
+				out = out[:500] + "...(截断)"
+			}
+			fmt.Fprintf(&sb, "\n%s  输出: %s", indent, out)
+		}
+		sb.WriteString("\n")
+		if len(s.Children) > 0 {
+			sb.WriteString(formatStepTree(s.Children, depth+1))
+		}
+	}
+	return sb.String()
+}

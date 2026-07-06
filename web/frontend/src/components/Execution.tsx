@@ -10,6 +10,7 @@ import {
 import { useWebSocket, type ProgressEvent } from '@/hooks/useWebSocket'
 import { executionsApi } from '@/api/client'
 import { MarkdownView } from './MarkdownView'
+import { ExecutionChatPanel } from './ExecutionChatPanel'
 import { WorkflowGraph, workflowToFlowSteps, type FlowStep } from '@/components/WorkflowGraph'
 // @ts-ignore - ansi-to-html 没有完整的 ESM 类型定义
 import AnsiToHtmlModule from 'ansi-to-html'
@@ -2084,6 +2085,9 @@ export default function Execution() {
           <FileText className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Floating AI assistant for this execution */}
+      {id && <ExecutionChatPanel executionId={id} />}
     </div>
   )
 }
