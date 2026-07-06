@@ -8,16 +8,22 @@
 
 | Phase | 名称 | 状态 | 依赖 |
 |---|---|---|---|
-| 0 | 文档 | ✅ 进行中 | — |
-| 1 | 地基(并发/安全/确定性字段) | ✅ 进行中 | 0 |
-| 2 | AI 内核(provider + ai action) | 📋 计划 | 1 |
-| 3 | 助手(chat / generate / explain / fix) | 📋 计划 | 2 |
-| 4 | 持久化与智能重放 | 📋 计划 | 2 |
-| 5 | 前端 AI 集成(Web chat + ai_token 流式) | 📋 计划 | 2, 3 |
+| 0 | 文档 | ✅ 完成 | — |
+| 1 | 地基(并发/安全/确定性字段) | ✅ 完成 | 0 |
+| 2 | AI 内核(provider + ai action) | ✅ 完成 | 1 |
+| 3 | 助手(chat / generate / explain / fix) | ✅ 完成 | 2 |
+| 4 | 持久化与智能重放 | ✅ 完成 | 2 |
+| 5 | 前端 AI 集成(Web chat + ai_token 流式) | 🚧 进行中(M1 完成,M2/M3 待做) | 2, 3 |
+| 5.5 | Artifact 管理 | 📋 计划 | 4 |
 | 6 | IM 渠道(飞书等) | 📋 计划 | 2, 3, 5 |
 | 7 | 容错(on_error: ai) | 📋 计划 | 2 |
 | 8 | 更多 provider(OpenAI 兼容 / Ollama) | 📋 计划 | 2 |
-| 9 | (暂缓)AI 动态编排 | 🅿️ 暂缓 | 全部 |
+| 9 | 执行沙箱(sandbox) | 📋 计划 | 5.5 |
+| 10 | Playbook(可分享可执行文档) | 📋 计划 | 6 |
+| 11 | 项目文档站点(VitePress + asciinema) | 📋 计划 | — |
+| 12 | Hook 与通知(hook/通知渠道) | 📋 计划 | 5.5, 6 |
+| 13 | 前端架构优化(组件拆分/JSON tag 统一) | 📋 计划 | 5 |
+| 14 | (暂缓)AI 动态编排 | 🅿️ 暂缓 | 全部 |
 
 ---
 
@@ -33,7 +39,7 @@
 
 ---
 
-## Phase 1 — 地基 ✅ 进行中
+## Phase 1 — 地基 ✅ 完成
 
 **目标**:为 AI 集成打地基,顺手修真实 bug。不引入 AI 依赖。
 
@@ -52,7 +58,7 @@
 
 ---
 
-## Phase 2 — AI 内核
+## Phase 2 — AI 内核 ✅ 完成
 
 **目标**:让 workflow 能在一个步骤里调用 AI。
 
@@ -94,7 +100,7 @@ steps:
 
 ---
 
-## Phase 3 — 助手(D + F)
+## Phase 3 — 助手(D + F) ✅ 完成
 
 **目标**:自然语言选/填/跑已有 workflow,以及生成/改/解释 workflow。
 
@@ -116,7 +122,7 @@ goworkflow explain deploy.yaml    # 解释这段 YAML 在干嘛
 
 ---
 
-## Phase 4 — 持久化与智能重放
+## Phase 4 — 持久化与智能重放 ✅ 完成
 
 **目标**:执行历史落盘,可重放,内存不泄漏。
 
@@ -132,20 +138,44 @@ goworkflow explain deploy.yaml    # 解释这段 YAML 在干嘛
 
 ---
 
-## Phase 5 — 前端 AI 集成
+## Phase 5 — 前端 AI 集成 🚧 进行中
 
-**目标**:Web UI 能聊天触发 + 实时看 AI 流式输出。
+**目标**:Web UI 能聊天触发 + 实时看 AI 流式输出 + 输出格式扩展。
 
-### 交付
-- [ ] WebSocket 协议加 `ai_token` 事件
-- [ ] `useWebSocket.ts` 处理 `ai_token`(去重兼容字段、删掉双 tag 兜底)
-- [ ] Web 自建聊天框组件(选/填/跑/取消)
-- [ ] 执行视图支持 AI 流式 token 显示
+### M1 — 入口 chat + ai_token 流式 ✅ 完成
+- [x] `/api/chat` SSE 端点(thinking → selection → done 事件流)
+- [x] ChatPanel 组件(消息流 + 输入 + 选 wf 确认卡片 + markdown 渲染)
+- [x] Execution.tsx `ai_token` 流式渲染(逐字 append + MarkdownView)
+- [x] react-markdown + remark-gfm 依赖
+- [x] `/chat` 路由 + 导航入口
+
+### M2 — 执行页浮动助手 📋 待做
+- [ ] 执行页加浮动 Chat 面板,针对当前执行问答
+- [ ] 后端:把执行状态(step tree + 变量 + 输出)喂给 AI 的能力(类似 explain 但针对进行中的执行)
+- [ ] 助手能回答"这步为什么失败"、"这个变量什么意思"
+
+### M3 — 输出格式扩展 + 按 step 选 model 📋 待做
+- [ ] `--output json`:输出 `WorkflowResult` 的 JSON(机器可读,脚本/管道友好)
+- [ ] `--output html`:生成可分享的 HTML 执行报告(独立输出格式,不走 artifact 机制)
+- [ ] 按 step 选 model:Step 加 `model` 字段,覆盖 workflow 级默认(架构已留口 `ai.Request.Model`)
 - [ ] AI step 在 DAG 图上标 `Nondeterministic` 视觉提示
 
-### 顺手
-- [ ] **JSON tag 统一**(`stepId`/`step_id` 选一种,前端去掉双字段兼容)
-- [ ] 巨型组件拆分(`Execution.tsx` 等)
+---
+
+## Phase 5.5 — Artifact 管理 📋 计划
+
+**目标**:workflow 的执行产物(artifact)可声明、可追踪、可从历史取回。
+
+### 交付
+- [ ] **声明式 artifact**:Step 加 `artifacts: [path...]` 字段,执行后引擎收集这些路径
+- [ ] **ArtifactStore 抽象**(类比 ExecutionStore):文件/对象存储可替换
+- [ ] **历史集成**:ExecutionSnapshot 记录 artifact 元信息(路径、大小、hash、mime)
+- [ ] **重放集成**:deterministic step 复用时,其 artifact 也恢复(原地或从仓库)
+- [ ] **Web 下载**:前端可浏览/下载历史执行的 artifact
+- [ ] **生命周期**:artifact 跟 execution 走(删历史 = 删产物),或独立 TTL
+
+### 为什么独立 Phase
+artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 报告是独立输出格式(`--output html`),不走 artifact 机制。
 
 ---
 
@@ -187,7 +217,88 @@ goworkflow explain deploy.yaml    # 解释这段 YAML 在干嘛
 
 ---
 
-## Phase 9 — (暂缓)AI 动态编排
+## Phase 9 — 执行沙箱(sandbox) 📋 计划
+
+**目标**:隔离执行环境,让 shell action 不污染宿主。和多用户/安全强相关。
+
+### 交付
+- [ ] 容器化执行(docker/podman 后端,每个执行一个临时容器)
+- [ ] 或轻量隔离(seccomp/chroot/namespace,不依赖 docker)
+- [ ] 资源限制(CPU/内存/时间/磁盘)
+- [ ] 网络策略(允许/禁止出站)
+- [ ] 文件系统隔离(只允许工作目录读写)
+
+### 为什么放后期
+sandbox 是基础设施级工程,和 AI 主线正交。在单机/可信内网场景下非必需;多用户/公网暴露时是 P0。
+
+---
+
+## Phase 10 — Playbook(可分享可执行文档) 📋 计划
+
+**目标**:workflow + 说明 = playbook,可分享给他人照着跑。
+
+### 交付
+- [ ] playbook 格式:workflow YAML + 文档段(README + 步骤说明 + 前置条件)
+- [ ] playbook 仓库(可分享链接,接收方一键运行)
+- [ ] 和渠道(Phase 6)集成:飞书/Web 推送 playbook 卡片,点击执行
+- [ ] playbook 版本化
+
+### 定位
+playbook 是渠道(Phase 6)的延伸:不只是"执行结果推到飞书",而是"可执行的文档推到飞书"。
+
+---
+
+## Phase 11 — 项目文档站点(VitePress + asciinema) 📋 计划
+
+**目标**:项目文档站点化 + 终端演示录制。
+
+### 交付
+- [ ] VitePress 站点(文档、教程、API 参考)
+- [ ] asciinema 录制(TUI/chat/replay 演示)
+- [ ] 部署(GitHub Pages / 自托管)
+- [ ] docs/ 现有文档迁移到 VitePress
+
+### 定位
+项目治理,和引擎核心能力正交。提升项目形象和上手体验,但不打断 AI 主线。
+
+---
+
+## Phase 12 — Hook 与通知 📋 计划
+
+**目标**:执行生命周期的扩展点(hook)+ 开箱即用的通知能力。
+
+### Hook(底层机制)
+- [ ] workflow/step 级 hook:`before_step` / `after_step` / `on_success` / `on_failure`
+- [ ] hook 可调外部 webhook(URL + payload 模板),或执行一段 shell
+- [ ] hook 拿到 `StepResult` / `WorkflowResult` 上下文
+- [ ] `on_error: ai`(Phase 7)作为 hook 的一个内置实例
+
+### 通知(hook 的预设应用)
+- [ ] step 级通知:`on_complete: notify`,推送到配置的渠道
+- [ ] 应用级通知配置(`~/.goworkflow/notify.yaml`):webhook URL / Slack / 邮件 / 飞书
+- [ ] 前端可配置:Web UI 里选哪些 step 完成时通知、推到哪个渠道
+- [ ] 通知模板:step 结果/workflow 摘要/失败详情
+
+### 定位
+hook 是"让用户挂钩自定义逻辑"的通用机制;通知是"最常见场景(完成时推消息)"的预设,让用户不写代码就能用。和 Phase 6(IM 渠道)的区别:渠道是"触发+看结果"的双向,hook/通知是"单向推"的。
+
+---
+
+## Phase 13 — 前端架构优化 📋 计划
+
+**目标**:清理前端技术债,提升可维护性。
+
+### 交付
+- [ ] **JSON tag 统一**(`stepId`/`step_id` 选一种,后端 + 前端同步,删掉双字段兜底)
+- [ ] **Execution.tsx 拆分**(2041 行 → `<StepList>` / `<StepDetail>` / `<LogPanel>`)
+- [ ] 全局 toast/error 通知机制(替代散落的 console.error)
+- [ ] 状态字符串常量化(前后端同步)
+- [ ] 历史管理前端 UI(复用 Phase 4 的 history API)
+- [ ] bundle 拆分(当前 766KB 单 chunk,code-split)
+
+---
+
+## Phase 14 — (暂缓)AI 动态编排
 
 **目标**(若做):AI 在执行中动态注入/修改步骤。
 
