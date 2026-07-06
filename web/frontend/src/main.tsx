@@ -5,6 +5,7 @@ import App from './App'
 import Dashboard from './components/Dashboard'
 import Execution from './components/Execution'
 import History from './components/History'
+import ChatPanel from './components/ChatPanel'
 import '@/i18n' // Initialize i18n
 import './index.css'
 
@@ -37,6 +38,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="dag-new" element={<Suspense fallback={<EditorLoading />}><DAGEditor /></Suspense>} />
           <Route path="execution/:id" element={<Execution />} />
           <Route path="history" element={<History />} />
+          <Route path="chat" element={<ChatPanel />} />
         </Route>
       </Routes>
     </BrowserRouter>

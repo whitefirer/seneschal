@@ -2,7 +2,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore } from '@/store/themeStore'
 import { LanguageSwitcher } from '@/components/LanguageSwitcher'
-import { Moon, Sun, Monitor, Workflow, History, FolderOpen } from 'lucide-react'
+import { Moon, Sun, Monitor, Workflow, History, FolderOpen, MessageSquare } from 'lucide-react'
 
 export default function App() {
   const location = useLocation()
@@ -11,6 +11,7 @@ export default function App() {
 
   const navItems = [
     { path: '/', label: t('nav.dashboard'), icon: FolderOpen },
+    { path: '/chat', label: 'Chat', icon: MessageSquare },
     { path: '/history', label: t('nav.history'), icon: History },
   ]
 

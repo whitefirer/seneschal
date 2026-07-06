@@ -113,3 +113,80 @@ export const executionsApi = {
     return res.data.data!
   },
 }
+
+// ── Chat (AI assistant) ────────────────────────────────────────────────────
+
+export interface ChatSelection {
+  workflow: string
+  variables: Record<string, string>
+  confidence: number
+  steps?: { name: string; action: string }[]
+  available?: string[]
+}
+
+export interface ChatSSEEvent {
+  type: 'thinking' | 'selection' | 'done' | 'error'
+  [key: string]: any
+}
+
+export const chatApi = {
+  // sendMessage POSTs to /api/chat and streams SSE events back. EventSource
+  // only supports GET, so we use fetch + ReadableStream to parse the SSE
+  // stream manually. onEvent is called for each parsed event; returns when
+  // the stream ends (done/error) or the AbortSignal aborts.
+  sendMessage: async (
+    message: string,
+    onEvent: (event: ChatSSEEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+      signal,
+    })
+    if (!res.ok || !res.body) {
+      throw new Error(`chat request failed: ${res.status}`)
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // SSE events are separated by a blank line (\n\n). Parse complete ones.
+      let idx: number
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        const event = parseSSE(raw)
+        if (event) onEvent(event)
+      }
+    }
+    // Flush any trailing event.
+    if (buffer.trim()) {
+      const event = parseSSE(buffer)
+      if (event) onEvent(event)
+    }
+  },
+}
+
+// parseSSE parses one raw SSE block (may contain `event:` and `data:` lines).
+function parseSSE(raw: string): ChatSSEEvent | null {
+  let eventType = 'message'
+  let dataStr = ''
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('event:')) eventType = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataStr += line.slice(5).trim()
+  }
+  if (!dataStr) return null
+  try {
+    return { type: eventType as ChatSSEEvent['type'], ...JSON.parse(dataStr) }
+  } catch {
+    return { type: eventType as ChatSSEEvent['type'], raw: dataStr }
+  }
+}

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { useWebSocket, type ProgressEvent } from '@/hooks/useWebSocket'
 import { executionsApi } from '@/api/client'
+import { MarkdownView } from './MarkdownView'
 import { WorkflowGraph, workflowToFlowSteps, type FlowStep } from '@/components/WorkflowGraph'
 // @ts-ignore - ansi-to-html 没有完整的 ESM 类型定义
 import AnsiToHtmlModule from 'ansi-to-html'
@@ -118,6 +119,10 @@ interface Step {
   httpMethod?: string
   // Log 字段
   logMessage?: string
+  // AI streaming output: incremental tokens accumulate here as they arrive,
+  // separate from `output` (which is set on step_complete with the final
+  // annotated text). The detail panel renders this as markdown.
+  aiOutput?: string
 }
 
 export default function Execution() {
@@ -349,6 +354,36 @@ export default function Execution() {
           return result
         })
         break
+
+      case 'ai_token': {
+        // Incremental AI token: append to the step's aiOutput (streaming text).
+        // Unlike step_output, no trailing newline — these are partial tokens.
+        const targetId = actualStepId || actualName || ''
+        setSteps((prev) => {
+          const appendToken = (steps: Step[]): Step[] => {
+            return steps.map((step) => {
+              if (step.id === targetId || step.name === actualName) {
+                return { ...step, aiOutput: (step.aiOutput || '') + (event.output || '') }
+              }
+              if (step.children?.length) {
+                const next = appendToken(step.children)
+                if (next !== step.children) return { ...step, children: next }
+              }
+              if (step.then_children?.length) {
+                const next = appendToken(step.then_children)
+                if (next !== step.then_children) return { ...step, then_children: next }
+              }
+              if (step.else_children?.length) {
+                const next = appendToken(step.else_children)
+                if (next !== step.else_children) return { ...step, else_children: next }
+              }
+              return step
+            })
+          }
+          return appendToken(prev)
+        })
+        break
+      }
 
       case 'workflow_end':
         setStatus((event.status as 'running' | 'success' | 'failed') || 'success')
@@ -1349,6 +1384,22 @@ export default function Execution() {
                 </div>
               )}
               
+              {selectedStep.aiOutput && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                      AI Output
+                      {selectedStep.status === 'running' && (
+                        <span className="ml-1 animate-pulse">●</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="text-sm text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                    <MarkdownView content={selectedStep.aiOutput} />
+                  </div>
+                </div>
+              )}
+
               {selectedStep.output && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
