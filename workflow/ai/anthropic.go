@@ -74,6 +74,26 @@ type anthropicContent struct {
 	Text string `json:"text"`
 }
 
+// buildAnthropicMessages converts the Request into Anthropic-format messages:
+// the conversation history (req.Messages) followed by the current Prompt as
+// the final user turn. When there is no history, it's a single user message
+// (backward compatible).
+func buildAnthropicMessages(req Request) []anthropicMessage {
+	msgs := make([]anthropicMessage, 0, len(req.Messages)+1)
+	for _, m := range req.Messages {
+		msgs = append(msgs, anthropicMessage{
+			Role:    m.Role,
+			Content: []anthropicContent{{Type: "text", Text: m.Content}},
+		})
+	}
+	// Current prompt as the final user turn.
+	msgs = append(msgs, anthropicMessage{
+		Role:    "user",
+		Content: []anthropicContent{{Type: "text", Text: req.Prompt}},
+	})
+	return msgs
+}
+
 // anthropicResponse is the non-streaming response from /v1/messages.
 type anthropicResponse struct {
 	ID           string             `json:"id"`
@@ -113,9 +133,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req Request) (Response
 		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
 		System:      req.System,
-		Messages: []anthropicMessage{
-			{Role: "user", Content: []anthropicContent{{Type: "text", Text: req.Prompt}}},
-		},
+		Messages:    buildAnthropicMessages(req),
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -205,10 +223,8 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, onToken fun
 		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
 		System:      req.System,
-		Messages: []anthropicMessage{
-			{Role: "user", Content: []anthropicContent{{Type: "text", Text: req.Prompt}}},
-		},
-		Stream: true,
+		Messages:    buildAnthropicMessages(req),
+		Stream:      true,
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {

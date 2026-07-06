@@ -45,6 +45,52 @@ func extractInputs(promptText string, stepInputs []string, allVars map[string]st
 	return inputs
 }
 
+// injectInputs appends any extracted variables that were NOT already
+// substituted via {{.var}} into the prompt as an "附加上下文" (additional
+// context) block. This makes the Inputs field effective: previously it was
+// extracted but never sent to the model.
+//
+// Variables already referenced in the prompt (via templateVarRe) are skipped
+// — they were substituted by ResolveTemplate and would be duplicated.
+func injectInputs(prompt string, inputs map[string]string) string {
+	if len(inputs) == 0 {
+		return prompt
+	}
+	// Find which variable names the prompt already references.
+	referenced := make(map[string]bool)
+	for _, m := range templateVarRe.FindAllStringSubmatch(prompt, -1) {
+		referenced[m[1]] = true
+	}
+
+	var unreferenced []string
+	for name := range inputs {
+		if !referenced[name] {
+			unreferenced = append(unreferenced, name)
+		}
+	}
+	if len(unreferenced) == 0 {
+		return prompt
+	}
+	// Sort for deterministic output.
+	for i := 1; i < len(unreferenced); i++ {
+		for j := i; j > 0 && unreferenced[j-1] > unreferenced[j]; j-- {
+			unreferenced[j-1], unreferenced[j] = unreferenced[j], unreferenced[j-1]
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(prompt)
+	sb.WriteString("\n\n附加上下文:\n")
+	for _, name := range unreferenced {
+		val := inputs[name]
+		if len(val) > 500 {
+			val = val[:500] + "...(截断)"
+		}
+		fmt.Fprintf(&sb, "- %s: %s\n", name, val)
+	}
+	return sb.String()
+}
+
 // execAI runs the "ai" action. In TUI mode (realtimePrinter set) it streams
 // tokens and emits ai_token events for incremental display; otherwise it
 // completes non-streaming and returns the full text. The generated text is
@@ -67,11 +113,38 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 		return "", fmt.Errorf("ai step '%s': resolve system template: %w", step.Name, err)
 	}
 
+	// Model: step-level override takes priority over the workflow-level default.
+	model := e.aiModel
+	if step.Model != "" {
+		model = step.Model
+	}
+
+	// Build conversation history (memory). Explicit step.Memory overrides the
+	// default (which is all prior AI turns from this execution).
+	var messages []ai.Message
+	if len(step.Memory) > 0 {
+		// Explicit: only the named steps' outputs as single assistant turns.
+		results := e.context.Results
+		for _, name := range step.Memory {
+			if out, ok := results[name]; ok {
+				messages = append(messages, ai.Message{Role: "assistant", Content: out})
+			}
+		}
+	} else {
+		// Default: all accumulated AI history.
+		messages = e.aiHistory
+	}
+
+	// Extract inputs and inject any unreferenced ones into the prompt.
+	inputs := extractInputs(prompt, step.Inputs, e.context.Snapshot())
+	prompt = injectInputs(prompt, inputs)
+
 	req := ai.Request{
 		System:      system,
 		Prompt:      prompt,
-		Inputs:      extractInputs(prompt, step.Inputs, e.context.Snapshot()),
-		Model:       e.aiModel,
+		Messages:    messages,
+		Inputs:      inputs,
+		Model:       model,
 		MaxTokens:   e.aiMaxTokens,
 		Temperature: e.aiTemperature,
 	}
@@ -100,6 +173,13 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 		e.context.Set(step.SaveOutput, resp.Text)
 	}
 	e.context.SetResult(step.Name, resp.Text)
+
+	// Accumulate this turn into the AI history so downstream AI steps (without
+	// explicit memory) see it as conversation context.
+	e.aiHistory = append(e.aiHistory,
+		ai.Message{Role: "user", Content: prompt},
+		ai.Message{Role: "assistant", Content: resp.Text},
+	)
 
 	// Annotate output with token usage when available, so verbose mode shows
 	// cost. Keep the raw text as the canonical output for consumers.
@@ -140,11 +220,17 @@ func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID st
 		return false, fmt.Errorf("ai_decide step '%s': resolve system template: %w", step.Name, err)
 	}
 
+	// Model: step-level override takes priority over the workflow-level default.
+	decideModel := e.aiModel
+	if step.Model != "" {
+		decideModel = step.Model
+	}
+
 	req := ai.Request{
 		System:      system,
 		Prompt:      prompt,
 		Inputs:      extractInputs(question, step.Inputs, e.context.Snapshot()),
-		Model:       e.aiModel,
+		Model:       decideModel,
 		MaxTokens:   e.aiMaxTokens,
 		// Decisions want determinism; force temperature 0 unless the workflow
 		// explicitly set one for creative judging.

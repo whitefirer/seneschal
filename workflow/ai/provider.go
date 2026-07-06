@@ -13,14 +13,27 @@ package ai
 
 import "context"
 
+// Message is one turn in a conversation history. Role is "user" or
+// "assistant". Providers translate this into their native multi-turn format.
+type Message struct {
+	Role    string
+	Content string
+}
+
 // Request is a single completion request to a provider.
 type Request struct {
 	// System is the top-level system prompt (Anthropic-style: sent as a
 	// sibling of messages, not as a system message).
 	System string
 
-	// Prompt is the user message text.
+	// Prompt is the current user message text.
 	Prompt string
+
+	// Messages is the conversation history (prior turns). When non-empty,
+	// providers send these as multi-turn messages followed by Prompt as the
+	// final user turn. When empty, Prompt is sent as a single user message
+	// (backward compatible).
+	Messages []Message
 
 	// Inputs are the workflow variables explicitly made available to the
 	// model. By convention the executor passes only the variables referenced

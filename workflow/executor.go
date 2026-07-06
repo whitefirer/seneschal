@@ -54,6 +54,10 @@ type Executor struct {
 	aiModel       string
 	aiMaxTokens   int
 	aiTemperature float64
+	// AI conversation history accumulated within one execution. Each ai /
+	// ai_decide step appends its prompt + response so downstream AI steps see
+	// prior turns (unless step.Memory overrides this).
+	aiHistory []ai.Message
 	// Replay cache (Phase 4): maps step ID (or Name fallback) to a stored
 	// StepResult. When non-nil, executeStep returns the cached result for
 	// deterministic steps instead of re-executing them. AI / nondeterministic
@@ -339,7 +343,22 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		}
 	}
 
-	return e.runWorkflow(wf, result)
+	// Export modes (json/html): suppress terminal printers during execution,
+	// run quietly, then emit the structured export afterward.
+	if IsExportMode(e.outputMode) {
+		e.verbose = false
+		e.printer = nil
+		e.richPrinter = nil
+	}
+
+	result = e.runWorkflow(wf, result)
+
+	// Emit the structured export to stdout if requested.
+	if IsExportMode(e.outputMode) {
+		exportResult(e.outputMode, result)
+	}
+
+	return result
 }
 
 // runTUI runs the workflow inside a bubbletea TUI on the current goroutine.
