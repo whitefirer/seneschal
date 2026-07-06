@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,5 +109,148 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	}
 
 	return output, nil
+}
+
+// execAIDecide runs the "ai_decide" action: a semantic yes/no judgment. It
+// asks the model the step's Question (with a forced "answer only true or
+// false" instruction), parses the boolean, stores it as "true"/"false" string
+// via step.SaveOutput (so it can flow into a condition's expression), and
+// returns a human-readable line as the step output. Marks the step
+// Nondeterministic via the executeStep dispatch.
+func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID string) (bool, error) {
+	if e.aiProvider == nil {
+		return false, fmt.Errorf("ai_decide step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
+	}
+
+	question, err := e.context.ResolveTemplate(step.Question)
+	if err != nil {
+		return false, fmt.Errorf("ai_decide step '%s': resolve question template: %w", step.Name, err)
+	}
+	if strings.TrimSpace(question) == "" {
+		return false, fmt.Errorf("ai_decide step '%s': question is empty", step.Name)
+	}
+
+	// Force the model to answer only true/false. We keep the prompt minimal so
+	// parsing stays robust: take the first token, strip punctuation, accept
+	// true/yes/1/是 vs false/no/0/否/否.
+	prompt := question + "\n\n请只回答 true 或 false,不要任何其他内容。"
+
+	system, err := e.context.ResolveTemplate(step.System)
+	if err != nil {
+		return false, fmt.Errorf("ai_decide step '%s': resolve system template: %w", step.Name, err)
+	}
+
+	req := ai.Request{
+		System:      system,
+		Prompt:      prompt,
+		Inputs:      extractInputs(question, step.Inputs, e.context.Snapshot()),
+		Model:       e.aiModel,
+		MaxTokens:   e.aiMaxTokens,
+		// Decisions want determinism; force temperature 0 unless the workflow
+		// explicitly set one for creative judging.
+		Temperature: e.aiTemperature,
+	}
+	// Cap decide responses tightly — the answer is one token.
+	if req.MaxTokens == 0 {
+		req.MaxTokens = 16
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Decide uses Complete (no streaming): the answer is a single token and
+	// per-token display adds no value.
+	resp, err := e.aiProvider.Complete(ctx, req)
+	if err != nil {
+		return false, fmt.Errorf("ai_decide step '%s': %w", step.Name, err)
+	}
+
+	result := parseBoolAnswer(resp.Text)
+	// Store "true"/"false" so a downstream condition can compare:
+	//   expression: "{{.is_urgent}} == true"
+	if step.SaveOutput != "" {
+		e.context.Set(step.SaveOutput, strconv.FormatBool(result))
+	}
+	e.context.SetResult(step.Name, strconv.FormatBool(result))
+
+	return result, nil
+}
+
+// parseBoolAnswer tolerantly extracts a boolean from a model's text response.
+// Models are instructed to answer only true/false, but occasionally wrap it
+// in prose ("The answer is true.") or add punctuation. Strategy:
+//  1. Take the first whitespace/punctuation-delimited token; if it is a
+//     recognized true/false spelling, use it.
+//  2. Otherwise scan the whole lowercased text for any true/false keyword.
+func parseBoolAnswer(text string) bool {
+	low := strings.ToLower(text)
+	t := strings.TrimSpace(low)
+	if t == "" {
+		return false
+	}
+	// First-token check.
+	first := t
+	for _, r := range []string{" ", "\n", "\t", ",", ".", ";", "。", "，", "；", "!", "?"} {
+		if i := strings.Index(first, r); i >= 0 {
+			first = first[:i]
+		}
+	}
+	if isTrueToken(first) {
+		return true
+	}
+	if isFalseToken(first) {
+		return false
+	}
+	// Fallback: scan for any keyword anywhere. Prefer the earliest match to
+	// handle "not false" style answers deterministically.
+	for i := 0; i < len(low); i++ {
+		rest := low[i:]
+		if atKeyword(rest, "true", "yes", "是", "对", "正确", "1") {
+			return true
+		}
+		if atKeyword(rest, "false", "no", "否", "错", "0") {
+			return false
+		}
+	}
+	return false
+}
+
+func isTrueToken(t string) bool {
+	switch t {
+	case "true", "yes", "1", "是", "对", "正确":
+		return true
+	}
+	return false
+}
+
+func isFalseToken(t string) bool {
+	switch t {
+	case "false", "no", "0", "否", "错", "错误":
+		return true
+	}
+	return false
+}
+
+// atKeyword reports whether s starts with any of the keywords at a token
+// boundary (so "true" matches but "truly" does not).
+func atKeyword(s string, kws ...string) bool {
+	for _, kw := range kws {
+		if !strings.HasPrefix(s, kw) {
+			continue
+		}
+		// Boundary check: end of string or a non-alphanumeric follows.
+		if len(s) == len(kw) {
+			return true
+		}
+		next := s[len(kw)]
+		if !isAlphaNum(next) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlphaNum(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
