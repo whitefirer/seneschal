@@ -39,3 +39,7 @@ screenshots/
 .bak/
 bin/
 memory/
+
+# Execution history (may contain sensitive data: variable values, command
+# outputs, etc. — must never be committed)
+executions/
