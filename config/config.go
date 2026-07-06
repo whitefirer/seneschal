@@ -116,6 +116,22 @@ func PortFlag() string {
 	return ""
 }
 
+// HostFlag parses --host from os.Args. Returns "" if not set. Lets the
+// bind address be overridden on the command line (e.g. by dev-dash) without
+// relying on server.yaml.
+func HostFlag() string {
+	for i, a := range os.Args {
+		if a == "--host" && i+1 < len(os.Args) {
+			parts := strings.SplitN(os.Args[i+1], "=", 2)
+			if len(parts) == 2 {
+				return parts[1]
+			}
+			return os.Args[i+1]
+		}
+	}
+	return ""
+}
+
 // ConfigFlag parses --config from os.Args. Returns "" if not set.
 func ConfigFlag() string {
 	for i, a := range os.Args {

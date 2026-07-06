@@ -24,6 +24,9 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Local server config (machine-specific; copy from config.example.yaml)
+server.yaml
+
 # Test outputs
 test-output/
 
