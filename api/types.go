@@ -37,6 +37,12 @@ type RunRequest struct {
 	DryRun    bool              `json:"dryRun,omitempty"`
 }
 
+// ChatRequest is the body for POST /api/chat.
+type ChatRequest struct {
+	Message string `json:"message"`           // user's natural-language intent
+	Dir     string `json:"dir,omitempty"`      // workflow directory; defaults to the server's workflows dir
+}
+
 type ExecutionRecord struct {
 	ID           string    `json:"id"`
 	WorkflowName string    `json:"workflowName"`
