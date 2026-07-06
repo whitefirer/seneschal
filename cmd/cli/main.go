@@ -47,6 +47,8 @@ func main() {
 		cmdChat(os.Args[2:])
 	case "replay":
 		cmdReplay(os.Args[2:])
+	case "history":
+		cmdHistory(os.Args[2:])
 	case "edit":
 		cmdEdit(os.Args[2:])
 	case "template":
@@ -778,6 +780,171 @@ func cmdReplay(args []string) {
 	if result != nil {
 		fmt.Fprintf(os.Stderr, "   Result: %s\n", result.Status)
 	}
+}
+
+// cmdHistory manages execution history: list, show, purge, delete.
+// Usage:
+//   goworkflow history list [--dir DIR]
+//   goworkflow history show <id> [--dir DIR]
+//   goworkflow history purge [--dir DIR] [--keep N]
+//   goworkflow history delete <id> [--dir DIR]
+func cmdHistory(args []string) {
+	if len(args) == 0 {
+		fmt.Println(`Usage:
+  goworkflow history list [--dir DIR]
+  goworkflow history show <id> [--dir DIR]
+  goworkflow history purge [--dir DIR] [--keep N]
+  goworkflow history delete <id> [--dir DIR]`)
+		return
+	}
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "list":
+		historyList(rest)
+	case "show":
+		historyShow(rest)
+	case "purge":
+		historyPurge(rest)
+	case "delete", "rm":
+		historyDelete(rest)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown history subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+// historyDir extracts --dir from args, defaulting to ./executions.
+func historyDir(args []string) string {
+	dir := executionsDir()
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--dir" || args[i] == "-d" {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		}
+	}
+	return dir
+}
+
+func historyList(args []string) {
+	store := workflow.NewFileStore(historyDir(args))
+	summaries, err := store.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(summaries) == 0 {
+		fmt.Println("(no execution history)")
+		return
+	}
+	fmt.Printf("%-28s  %-20s  %-8s  %-20s  %s\n", "ID", "WORKFLOW", "STATUS", "STARTED", "DURATION")
+	for _, s := range summaries {
+		dur := s.Duration
+		if dur == "" {
+			dur = "-"
+		}
+		nd := ""
+		if s.Nondeterministic {
+			nd = " ⚡"
+		}
+		fmt.Printf("%-28s  %-20s  %-8s  %-20s  %s%s\n", s.ID, truncStr(s.WorkflowName, 20), s.Status, s.StartTime, dur, nd)
+	}
+}
+
+func historyShow(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: execution ID required")
+		os.Exit(1)
+	}
+	id := args[0]
+	store := workflow.NewFileStore(historyDir(args))
+	snap, err := store.Get(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("ID:          %s\n", snap.ID)
+	fmt.Printf("Workflow:    %s\n", snap.WorkflowName)
+	fmt.Printf("Status:      %s\n", snap.Status)
+	if snap.StartTime != "" {
+		fmt.Printf("Started:     %s\n", snap.StartTime)
+	}
+	if snap.EndTime != "" {
+		fmt.Printf("Ended:       %s\n", snap.EndTime)
+	}
+	if snap.Duration != "" {
+		fmt.Printf("Duration:    %s\n", snap.Duration)
+	}
+	if snap.Error != "" {
+		fmt.Printf("Error:       %s\n", snap.Error)
+	}
+	if snap.Nondeterministic {
+		fmt.Printf("Nondeterm:   true (contains AI steps)\n")
+	}
+	if len(snap.Variables) > 0 {
+		fmt.Println("Variables:")
+		for _, k := range sortedKeys(snap.Variables) {
+			fmt.Printf("  %s = %s\n", k, snap.Variables[k])
+		}
+	}
+	if len(snap.Steps) > 0 {
+		fmt.Println("Steps:")
+		for _, s := range snap.Steps {
+			flag := ""
+			if s.Nondeterministic {
+				flag = " ⚡AI"
+			}
+			fmt.Printf("  [%s] %s (%s)%s\n", s.Status, s.Name, s.Action, flag)
+			if s.Output != "" {
+				for _, line := range strings.Split(strings.TrimSpace(s.Output), "\n") {
+					fmt.Printf("      %s\n", line)
+				}
+			}
+		}
+	}
+}
+
+func historyPurge(args []string) {
+	dir := historyDir(args)
+	keep := 50
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--keep" || args[i] == "-k" {
+			if i+1 < len(args) {
+				if n, err := fmt.Sscanf(args[i+1], "%d", &keep); err == nil && n == 1 {
+					i++
+				}
+			}
+		}
+	}
+	store := workflow.NewFileStore(dir)
+	deleted, err := store.Purge(keep)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Deleted %d execution(s), kept most recent %d.\n", deleted, keep)
+}
+
+func historyDelete(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: execution ID required")
+		os.Exit(1)
+	}
+	id := args[0]
+	store := workflow.NewFileStore(historyDir(args))
+	if err := store.Delete(id); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Deleted %s\n", id)
+}
+
+func truncStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
 }
 
 // sortedKeys returns map keys in sorted order for deterministic display.
