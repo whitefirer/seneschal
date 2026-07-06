@@ -683,6 +683,11 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 			result.Steps = append(result.Steps, sr)
 		}
 	}
+
+	// Propagate nondeterminism: any step that consumes the output of an
+	// ai/ai_decide step becomes Nondeterministic itself (taint along
+	// DependsOn). Also derives the workflow-level flag.
+	result.Nondeterministic = propagateDeterminism(result.Steps)
 }
 
 // executeStep executes a single step.
@@ -785,6 +790,15 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 			}
 	case "ai":
 		output, err = e.execAI(step, stepID, depth, parentID)
+		result.Nondeterministic = true
+	case "ai_decide":
+		decided, derr := e.execAIDecide(step, stepID, depth, parentID)
+		if derr != nil {
+			err = derr
+		} else {
+			result.ConditionResult = &decided
+			output = fmt.Sprintf("decided: %v", decided)
+		}
 		result.Nondeterministic = true
 	default:
 		err = fmt.Errorf("unknown action: %s", step.Action)
