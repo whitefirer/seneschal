@@ -16,6 +16,10 @@ const (
 	OutputModeCompact OutputMode = "compact"
 	// OutputModeTUI 终端进度 TUI 模式
 	OutputModeTUI OutputMode = "tui"
+	// OutputModeJSON 输出 WorkflowResult 的 JSON（机器可读，脚本/管道友好）
+	OutputModeJSON OutputMode = "json"
+	// OutputModeHTML 输出可分享的 HTML 执行报告
+	OutputModeHTML OutputMode = "html"
 )
 
 // ParseOutputMode 解析输出模式字符串
@@ -33,9 +37,20 @@ func ParseOutputMode(s string) OutputMode {
 		return OutputModeCompact
 	case "tui", "realtime", "progress":
 		return OutputModeTUI
+	case "json":
+		return OutputModeJSON
+	case "html":
+		return OutputModeHTML
 	default:
 		return OutputModePlain
 	}
+}
+
+// IsExportMode reports whether the mode produces a structured export
+// (JSON/HTML) rather than terminal output. Callers use this to suppress
+// terminal printers during execution and emit the export afterward.
+func IsExportMode(m OutputMode) bool {
+	return m == OutputModeJSON || m == OutputModeHTML
 }
 
 // String 返回模式的字符串表示

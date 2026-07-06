@@ -68,6 +68,10 @@ type Step struct {
 	System   string   `yaml:"system,omitempty"`   // optional system prompt
 	Inputs   []string `yaml:"inputs,omitempty"`   // explicit vars to expose to the model
 	Question string   `yaml:"question,omitempty"` // ai_decide: the question to answer true/false
+	Model    string   `yaml:"model,omitempty"`    // override the workflow-level model for this step
+	// Memory explicitly declares which upstream steps' AI output to include as
+	// conversation history. Empty = automatic (all prior AI steps' turns).
+	Memory   []string `yaml:"memory,omitempty"`
 
 	// DAG support (依赖关系和下一节点)
 	Next       []string `yaml:"next,omitempty"`       // 指定下一节点列表（DAG模式）
