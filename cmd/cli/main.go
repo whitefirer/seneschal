@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
@@ -44,6 +45,8 @@ func main() {
 		cmdGenerate(os.Args[2:])
 	case "chat":
 		cmdChat(os.Args[2:])
+	case "replay":
+		cmdReplay(os.Args[2:])
 	case "edit":
 		cmdEdit(os.Args[2:])
 	case "template":
@@ -205,6 +208,40 @@ func cmdRun(args []string) {
 	if result != nil && result.Status == "failed" && result.Error != "" {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
 		os.Exit(1)
+	}
+
+	// Persist the execution so it can be replayed. Best-effort: a failure
+	// (e.g. no executions dir) is logged but does not fail the run.
+	if !dryRun {
+		execID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHexCLI(4))
+		if raw, rerr := os.ReadFile(args[0]); rerr == nil {
+			store := workflow.NewFileStore(executionsDir())
+			dur := ""
+			if start, e := parseRFC3339(result.StartTime); e == nil {
+				if end, e := parseRFC3339(result.EndTime); e == nil {
+					dur = end.Sub(start).String()
+				}
+			}
+			_ = store.Save(workflow.ExecutionSnapshot{
+				ExecutionSummary: workflow.ExecutionSummary{
+					ID:               execID,
+					WorkflowName:     wf.Name,
+					WorkflowFile:     filepathBase(args[0]),
+					Status:           result.Status,
+					StartTime:        result.StartTime,
+					EndTime:          result.EndTime,
+					Duration:         dur,
+					Error:            result.Error,
+					StepsCount:       len(wf.Steps),
+					Nondeterministic: result.Nondeterministic,
+				},
+				Steps:     result.Steps,
+				Variables: result.Variables,
+				Workflow:  string(raw),
+			})
+			// Print the ID so users can replay it. Goes to stderr to keep stdout clean.
+			fmt.Fprintf(os.Stderr, "📝 Execution ID: %s\n", execID)
+		}
 	}
 }
 
@@ -638,6 +675,108 @@ func cmdChat(args []string) {
 	if result != nil && result.Status == "failed" && result.Error != "" {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
 		os.Exit(1)
+	}
+}
+
+// executionsDir is the default CLI history directory (matches the server
+// default so CLI runs and replays share history).
+func executionsDir() string { return "./executions" }
+
+// randomHexCLI returns n hex characters of randomness for execution IDs.
+func randomHexCLI(n int) string {
+	const hex = "0123456789abcdef"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "0000"
+	}
+	out := make([]byte, n)
+	for i, c := range b {
+		out[i] = hex[c%16]
+	}
+	return string(out)
+}
+
+func parseRFC3339(s string) (time.Time, error) { return time.Parse(time.RFC3339, s) }
+func filepathBase(p string) string {
+	// strip dir + yaml suffix to mirror the server's WorkflowFile field.
+	base := p
+	if i := strings.LastIndexAny(base, "/\\"); i >= 0 {
+		base = base[i+1:]
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml")
+}
+
+// cmdReplay loads a historical execution and re-runs it: deterministic steps
+// reuse their recorded output, nondeterministic (AI) steps re-execute.
+func cmdReplay(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Error: please specify an execution ID")
+		fmt.Println("Usage: goworkflow replay <exec-id> [--dir DIR] [--full] [--step NAME]")
+		os.Exit(1)
+	}
+
+	dir := executionsDir()
+	full := false
+	outputMode := "rich"
+	var onlySteps []string
+	id := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dir", "-d":
+			if i+1 < len(args) {
+				dir = args[i+1]
+				i++
+			}
+		case "--full":
+			full = true
+		case "--output-mode", "-m":
+			if i+1 < len(args) {
+				outputMode = args[i+1]
+				i++
+			}
+		case "--step":
+			if i+1 < len(args) {
+				onlySteps = append(onlySteps, args[i+1])
+				i++
+			}
+		default:
+			if id == "" {
+				id = args[i]
+			}
+		}
+	}
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "Error: execution ID required")
+		os.Exit(1)
+	}
+
+	store := workflow.NewFileStore(dir)
+	replayer := workflow.NewReplayer(store)
+
+	// Build an AI provider from env so AI steps can re-run. If unavailable,
+	// replay still works for purely deterministic workflows.
+	executor := workflow.NewExecutor(nil)
+	executor.SetVerbose(true)
+	executor.SetOutputMode(workflow.ParseOutputMode(outputMode))
+	executor.SetTheme("default")
+	if p, err := ai.BuildProvider(ai.Config{}); err == nil {
+		executor.SetAIProvider(p)
+	}
+
+	opts := workflow.ReplayOptions{Full: full, OnlySteps: onlySteps}
+	result, hits, misses, err := replayer.Replay(id, executor, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	mode := "smart"
+	if full {
+		mode = "full"
+	}
+	fmt.Fprintf(os.Stderr, "\n🔁 Replay (%s): %d step(s) reused, %d step(s) re-executed\n", mode, hits, misses)
+	if result != nil {
+		fmt.Fprintf(os.Stderr, "   Result: %s\n", result.Status)
 	}
 }
 
