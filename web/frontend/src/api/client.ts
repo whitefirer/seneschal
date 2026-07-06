@@ -116,12 +116,25 @@ export const executionsApi = {
 
 // ── Chat (AI assistant) ────────────────────────────────────────────────────
 
+export interface ChatStep {
+  name: string
+  action: string
+  next?: string[]
+  depends_on?: string[]
+  then?: ChatStep[]
+  else?: ChatStep[]
+  do?: ChatStep[]
+  steps?: ChatStep[]
+}
+
 export interface ChatSelection {
   workflow: string
+  fileName?: string          // file name for the /run API (which matches by file, not YAML name)
   variables: Record<string, string>
   confidence: number
-  steps?: { name: string; action: string }[]
+  steps?: ChatStep[]
   available?: string[]
+  suggestCreate?: boolean    // no match — frontend offers "generate" option
 }
 
 export interface ChatSSEEvent {
