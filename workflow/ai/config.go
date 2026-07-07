@@ -96,7 +96,6 @@ func BuildProvider(cfg Config) (Provider, error) {
 	case "ollama":
 		baseURL := cfg.BaseURL
 		if env := os.Getenv("OLLAMA_HOST"); env != "" {
-			// OLLAMA_HOST may be "host:port" without scheme.
 			if !strings.HasPrefix(env, "http") {
 				env = "http://" + env
 			}
@@ -109,11 +108,28 @@ func BuildProvider(cfg Config) (Provider, error) {
 			BaseURL:      baseURL,
 			DefaultModel: cfg.Model,
 			HTTPClient: &http.Client{
-				Timeout: 300 * time.Second, // local models can be slow
+				Timeout: 300 * time.Second,
+			},
+		}, nil
+	case "openai":
+		apiKey := os.Getenv("OPENAI_API_KEY")
+		baseURL := cfg.BaseURL
+		if env := os.Getenv("OPENAI_BASE_URL"); env != "" {
+			baseURL = env
+		}
+		if cfg.Model == "" {
+			return nil, fmt.Errorf("ai provider %q requires a model: set ai.model (e.g. \"gpt-4o\", \"moonshot-v1-8k\", \"glm-4\")", provider)
+		}
+		return &OpenAIProvider{
+			BaseURL:      baseURL,
+			APIKey:       apiKey,
+			DefaultModel: cfg.Model,
+			HTTPClient: &http.Client{
+				Timeout: 120 * time.Second,
 			},
 		}, nil
 	default:
-		return nil, fmt.Errorf("unknown ai provider %q (supported: anthropic, ollama)", provider)
+		return nil, fmt.Errorf("unknown ai provider %q (supported: anthropic, ollama, openai)", provider)
 	}
 }
 
