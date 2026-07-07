@@ -30,3 +30,12 @@ allowed_origins:
   - "http://localhost:5173"
   - "http://127.0.0.1:8888"
   - "http://127.0.0.1:5173"
+
+# AI 全局默认配置。所有 workflow 共享;workflow YAML 的 ai: 段可覆盖,step.model 可单步覆盖。
+# API key 只从环境变量读(ANTHROPIC_API_KEY / DEEPSEEK_API_KEY),不写在这里。
+# ai:
+#   provider: anthropic                          # 或未来的 openai / ollama
+#   model: deepseek-v4-flash                     # 必填!模型名不硬编码,从这里配
+#   base_url: https://api.deepseek.com/anthropic # DeepSeek Anthropic 端点;Claude 用 https://api.anthropic.com
+#   max_tokens: 1024
+#   temperature: 0

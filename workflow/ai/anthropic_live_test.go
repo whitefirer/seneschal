@@ -22,7 +22,7 @@ func TestStream_DeepSeekLive(t *testing.T) {
 
 	p := &AnthropicProvider{
 		APIKey:       key,
-		DefaultModel: "deepseek-chat",
+		DefaultModel: "deepseek-v4-flash",
 		HTTPClient:   &http.Client{Timeout: 60 * time.Second},
 	}
 

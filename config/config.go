@@ -23,6 +23,21 @@ type ServerConfig struct {
 	// gitignored — do not commit this directory.
 	ExecutionsDir  string   `yaml:"executions_dir"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
+	// AI is the server-level AI configuration. Serves as the global default
+	// for all workflows; a workflow's ai: block overrides per-workflow, and
+	// step.model overrides per-step. API key still comes from environment
+	// variables only (never written to YAML).
+	AI AIConfig    `yaml:"ai,omitempty"`
+}
+
+// AIConfig is the server-level AI provider configuration. It mirrors
+// workflow.AI but lives in server.yaml as a global default.
+type AIConfig struct {
+	Provider    string  `yaml:"provider,omitempty"`
+	Model       string  `yaml:"model,omitempty"`
+	BaseURL     string  `yaml:"base_url,omitempty"`
+	MaxTokens   int     `yaml:"max_tokens,omitempty"`
+	Temperature float64 `yaml:"temperature,omitempty"`
 }
 
 // Default returns a config with safe defaults.

@@ -20,7 +20,7 @@ variables:                    # 可选,工作流级变量
   <key>: <value>
 ai:                           # 可选,AI 配置(密钥从环境变量读,绝不写进 YAML)
   provider: anthropic
-  model: deepseek-chat
+  model: deepseek-v4-flash
 steps:                        # 必填,步骤列表
   - name: <步骤名>            # 必填,唯一
     action: <类型>            # 必填

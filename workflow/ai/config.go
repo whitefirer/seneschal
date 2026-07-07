@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -21,7 +20,7 @@ type Config struct {
 	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 
 	// Model is the default model id for ai/ai_decide steps that do not
-	// specify their own (e.g. "deepseek-chat", "claude-sonnet-4-5-20250929").
+	// specify their own (e.g. "deepseek-v4-flash", "claude-sonnet-4-5-20250929").
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 
 	// BaseURL overrides the provider's default API root. Useful for
@@ -67,23 +66,20 @@ func BuildProvider(cfg Config) (Provider, error) {
 		if env := os.Getenv("ANTHROPIC_BASE_URL"); env != "" {
 			baseURL = env
 		}
-		model := cfg.Model
-		if model == "" {
-			// Fall back to a sensible default. Pick based on the resolved base
-			// URL: DeepSeek's endpoint -> deepseek-chat, otherwise Claude's
-			// latest Sonnet. Users override via Config.Model.
-			if isDeepSeekEndpoint(baseURL) {
-				model = "deepseek-chat"
-			} else {
-				model = "claude-sonnet-4-5-20250929"
-			}
+		// Model MUST come from config (workflow YAML ai.model, or per-step
+		// step.model). We do NOT hardcode a default — model names are
+		// provider-specific and change over time (e.g. deepseek-chat was
+		// deprecated in favor of deepseek-v4-flash). Leaving it empty lets the
+		// provider surface a clear error if the caller forgot to set it.
+		if cfg.Model == "" {
+			return nil, fmt.Errorf("ai provider %q requires a model: set ai.model in the workflow YAML or ai.Config.Model (e.g. \"deepseek-v4-flash\", \"claude-sonnet-4-5-20250929\")", provider)
 		}
 		return &AnthropicProvider{
 			BaseURL:      baseURL,
 			APIKey:       apiKey,
-			DefaultModel: model,
+			DefaultModel: cfg.Model,
 			HTTPClient: &http.Client{
-				Timeout: 120 * time.Second, // generous default for model latency
+				Timeout: 120 * time.Second,
 			},
 		}, nil
 	default:
@@ -98,12 +94,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// isDeepSeekEndpoint reports whether baseURL points at DeepSeek (whose
-// Anthropic-compatible endpoint is api.deepseek.com/anthropic). Used to pick a
-// sensible default model when Config.Model is empty.
-func isDeepSeekEndpoint(baseURL string) bool {
-	return baseURL == "" || // empty = provider default = DeepSeek
-		strings.Contains(baseURL, "deepseek.com")
 }
