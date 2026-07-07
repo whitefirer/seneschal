@@ -49,6 +49,8 @@ type Executor struct {
 	tuiStyle       string              // TUI style: "hermes" or "claude"
 	forceColor     bool                // force color output even if not a terminal
 	workflowDir    string              // directory of the current workflow file (for sub-workflow relative paths)
+	workflowName   string              // current workflow name (for hooks)
+	workflowHooks  []HookConfig        // workflow-level hooks (stored for step inheritance)
 	// AI integration (Phase 2). aiProvider is set via SetAIProvider or built
 	// from the workflow's ai: config in Execute(). The ai* fields hold
 	// workflow-level defaults; steps may override per-step in M3+.
@@ -344,6 +346,10 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 
 	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", 0, "", nil)
 
+	// Store workflow context for hooks.
+	e.workflowName = wf.Name
+	e.workflowHooks = wf.Hooks
+
 	// Validate workflow
 
 	// TUI 模式：真实终端或强制颜色 → run TUI on current goroutine, workflow in background
@@ -428,6 +434,9 @@ func (e *Executor) runWorkflow(wf *Workflow, result *WorkflowResult) *WorkflowRe
 	e.executeDAG(wf, result)
 
 	e.sendEvent("workflow_end", wf.Name, "", "", result.Status, result.Error, "", 0, "", nil)
+
+	// Fire workflow_end hooks.
+	e.fireWorkflowHooks(wf, result)
 
 	result.EndTime = Now()
 
@@ -1060,6 +1069,9 @@ errorRecovery:
 		e.stepCallback(step.Name, result)
 	}
 
+	// Fire after_step hooks (step-level + inherited workflow-level).
+	e.fireStepHooks(step, result)
+
 	// Send step_output event if there's output
 	if result.Output != "" {
 		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, result.Duration, depth, parentID, nil)
@@ -1109,6 +1121,46 @@ func (e *Executor) stepCommandForError(step Step) string {
 		return step.Code
 	default:
 		return ""
+	}
+}
+
+// fireStepHooks fires after_step hooks for a completed step. Both step-level
+// and workflow-level hooks are checked. The executor must have access to the
+// workflow's hooks (stored at Execute time).
+func (e *Executor) fireStepHooks(step Step, result StepResult) {
+	event := HookEvent{
+		Phase:        HookAfterStep,
+		StepName:     step.Name,
+		Action:       step.Action,
+		Status:       result.Status,
+		Output:       result.Output,
+		Error:        result.Error,
+		Duration:     result.Duration,
+		WorkflowName: e.workflowName,
+		Variables:    e.context.Snapshot(),
+	}
+	// Step-level hooks.
+	for _, hook := range step.Hooks {
+		executeHook(hook, event, e)
+	}
+	// Workflow-level hooks (inherited).
+	for _, hook := range e.workflowHooks {
+		executeHook(hook, event, e)
+	}
+}
+
+// fireWorkflowHooks fires workflow_end hooks after the entire workflow completes.
+func (e *Executor) fireWorkflowHooks(wf *Workflow, result *WorkflowResult) {
+	event := HookEvent{
+		Phase:        HookWorkflowEnd,
+		WorkflowName: wf.Name,
+		Status:       result.Status,
+		Error:        result.Error,
+		Output:       result.Error, // best context for end hooks
+		Variables:    result.Variables,
+	}
+	for _, hook := range wf.Hooks {
+		executeHook(hook, event, e)
 	}
 }
 

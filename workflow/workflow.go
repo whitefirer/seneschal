@@ -86,6 +86,7 @@ type Step struct {
 	// Memory explicitly declares which upstream steps' AI output to include as
 	// conversation history. Empty = automatic (all prior AI steps' turns).
 	Memory   []string `yaml:"memory,omitempty"`
+	Hooks    []HookConfig `yaml:"hooks,omitempty"`           // lifecycle hooks for this step
 
 	// DAG support (依赖关系和下一节点)
 	Next       []string `yaml:"next,omitempty"`       // 指定下一节点列表（DAG模式）
@@ -111,6 +112,8 @@ type Workflow struct {
 	// stored here (they come from environment variables at runtime) — see
 	// docs/PRODUCT.md "Provider 架构" and ai.BuildProvider.
 	AI AIConfig `yaml:"ai,omitempty"`
+	// Hooks are workflow-level lifecycle hooks (applied to all steps + workflow_end).
+	Hooks []HookConfig `yaml:"hooks,omitempty"`
 }
 
 // StepResult holds the result of executing a single step.
