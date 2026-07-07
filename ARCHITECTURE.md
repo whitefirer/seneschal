@@ -370,13 +370,15 @@ cd web/frontend && npm run dev
 2. 四套 Printer 无接口——统一 `Printer` interface
 3. ~~`parentId` 共享可变状态~~ ✅ Phase 1 已修(参数化传递,移除 Executor 字段)
 4. ~~变量裸 map 遍历~~ ✅ Phase 1 已修(走 `Snapshot()`)
-5. JSON tag 不一致(`stepId`/`step_id`)——统一
-6. 状态字符串裸用(`"success"`/`"completed"`/`"done"`)——常量化
-7. 执行历史全内存、无淘汰——Phase 4 持久化
+5. ~~JSON tag 不一致(`stepId`/`step_id`)~~ ✅ Phase 8.5 已统一(camelCase,删掉前端双字段兜底)
+6. 状态字符串裸用(`"success"`/`"completed"`/`"done"`)——常量化(status.go 已有常量定义,未全量替换)
+7. ~~执行历史全内存、无淘汰~~ ✅ Phase 4 持久化(FileStore + 内存 100 条上限)
 8. `Workflow.Mode` 字段废弃但保留(兼容旧 YAML)
 9. `evaluateExpression` 错误被静默吞(`executor_foreach.go:286,477,497`)
 10. `execShell` 用 `context.Background()` 不可取消
 11. condition 两条执行路径重复
-12. 前端巨型组件(拆分)
+12. 前端巨型组件(Execution.tsx 2096 行,已 lazy load 拆 chunk,待进一步拆组件)
 13. ~~`hasDAGStructure` 死代码~~ ✅ Phase 1 已删
 14. ~~`execHTTP` 每次新建 client~~ ✅ Phase 1 已复用 `e.httpClient`(per-step context 控超时)
+15. ~~测试覆盖不足~~ ✅ Phase 8.5 补核心引擎测试(executor/parser/replay/mock provider)
+16. ~~前端 bundle 过大~~ ✅ Phase 8.5 拆分(776KB→75KB,lazy load + manualChunks)
