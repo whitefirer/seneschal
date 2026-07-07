@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"time"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +87,18 @@ func main() {
 	hub := api.NewWSHub()
 	go hub.Run()
 
+	// Resolve runbooks directory.
+	runbooksDir := cfg.RunbooksDir
+	if runbooksDir == "" {
+		runbooksDir = "./runbooks"
+	}
+	if !filepath.IsAbs(runbooksDir) {
+		if wd, err := os.Getwd(); err == nil {
+			runbooksDir = filepath.Join(wd, runbooksDir)
+		}
+	}
+	os.MkdirAll(runbooksDir, 0755)
+
 	// Create API handler with a file-backed execution store so history
 	// survives restarts.
 	store := workflow.NewFileStore(executionsDir)
@@ -130,6 +143,16 @@ func main() {
 	r.HandleFunc("/api/executions/{id}/ask", handler.AskExecution).Methods("POST")
 	r.HandleFunc("/api/chat", handler.ChatHandler).Methods("POST")
 	r.HandleFunc("/api/ws", handler.WSHandler)
+
+	// Runbook routes — trigger/schedule management
+	runbookMgr := workflow.NewRunbookManager(runbooksDir, workflowsDir,
+		api.MakeTriggerCallback(store, hub, workflowsDir, aiCfg),
+		func(format string, args ...interface{}) { log.Printf(format, args...) },
+	)
+	runbookMgr.LoadDir()
+	go runbookMgr.Watch(10 * time.Second)
+	runbookHandler := api.NewRunbookHandler(runbookMgr, runbooksDir, workflowsDir)
+	api.RegisterRunbookRoutes(r, runbookHandler)
 
 	// Static files - SPA with fallback to index.html
 	staticFS, err := fs.Sub(staticFiles, "static")
