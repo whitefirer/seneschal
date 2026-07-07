@@ -111,9 +111,13 @@ export default function ChatPanel() {
               // Rich data: selection (for select_workflow) or yaml (for generate)
               if (event.selection) {
                 step.selection = event.selection as unknown as ChatSelection
-                last.selection = step.selection // also set on message for SelectionCard
+                last.selection = step.selection
               }
               if (event.yaml) step.yaml = event.yaml
+            }
+            // run_workflow returns executionId — set on message for ExecProgress
+            if (event.executionId) {
+              ;(last as any).executionId = event.executionId
             }
             next[next.length - 1] = { ...last }
             return next
@@ -195,12 +199,19 @@ export default function ChatPanel() {
               {m.thinking && !m.content && (!m.toolSteps || m.toolSteps.length === 0) && (
                 <span className="text-sm text-muted-foreground animate-pulse">思考中…</span>
               )}
-              {m.selection && m.selection.workflow && (
+              {m.selection && m.selection.workflow && !(m as any).executionId && (
                 <SelectionCard
                   selection={m.selection}
                   onRun={() => runSelection(i, m.selection!)}
                   loading={loading}
                   onNavigate={(id) => navigate(`/execution/${id}`)}
+                />
+              )}
+              {(m as any).executionId && (
+                <ExecProgress
+                  execId={(m as any).executionId}
+                  onNavigate={(id) => navigate(`/execution/${id}`)}
+                  onRerun={() => runSelection(i, m.selection!)}
                 />
               )}
             </div>
