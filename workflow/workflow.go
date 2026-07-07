@@ -14,6 +14,8 @@ type Step struct {
 	ID             string            `yaml:"id,omitempty"`
 	Action         string            `yaml:"action"` // shell, http, condition, parallel, set, sleep, log, template, foreach
 	ContinueOnError bool             `yaml:"continue_on_error"`
+	Retry           int              `yaml:"retry,omitempty"`           // max retries on failure (0 = no retry)
+	RetryDelay      string           `yaml:"retry_delay,omitempty"`     // delay between retries, e.g. "5s"
 	Description    string            `yaml:"description,omitempty"`
 
 	// Shell action
@@ -135,6 +137,7 @@ type StepResult struct {
 	// SideEffecting:本步有副作用但可复现(shell/http/template 写盘)
 	Nondeterministic bool `json:"nondeterministic,omitempty"`
 	SideEffecting    bool `json:"sideEffecting,omitempty"`
+	Retries          int  `json:"retries,omitempty"` // actual retries performed (step-level)
 }
 
 // WorkflowResult holds the result of executing a workflow.

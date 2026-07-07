@@ -818,67 +818,102 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 	var children []StepResult
 	var condResult bool
 
-	switch step.Action {
-	case "shell":
-		output, err = e.execShell(step)
-		// Set ShellCommand to whichever field was used
-		if step.Command != "" {
-			result.ShellCommand = step.Command
-		} else {
-			result.ShellCommand = step.Shell
+	// Step-level retry: repeat the dispatch up to step.Retry+1 times on
+	// failure. Only the dispatch is retried — save_output / context.Set happen
+	// inside the dispatch functions and are idempotent for most actions (shell
+	// re-runs, AI re-calls). The final attempt's result is what sticks.
+	maxAttempts := 1
+	if step.Retry > 0 {
+		maxAttempts = step.Retry + 1
+	}
+	var retryDelay time.Duration
+	if step.RetryDelay != "" {
+		if d, e := ParseDuration(step.RetryDelay); e == nil {
+			retryDelay = d
 		}
-	case "http":
-		output, err = e.execHTTP(step)
-		result.HTTPUrl = step.URL
-		result.HTTPMethod = step.Method
-	case "condition":
-		var execChildren, skippedChildren []StepResult
-		output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult, stepID)
-		result.ConditionResult = &condResult
-		result.Expression = step.Expression
-		// Condition: 设置 ThenChildren 和 ElseChildren
-		if condResult {
-			result.ThenChildren = execChildren // 执行了 then 分支
-			result.ElseChildren = skippedChildren // else 分支未执行
-		} else {
-			result.ElseChildren = execChildren // 执行了 else 分支
-			result.ThenChildren = skippedChildren // then 分支未执行
-		}
-		// Condition 不设置 Children（使用 then_children 和 else_children）
-		children = nil // 清空 children，避免被下面设置到 result.Children
-	case "set":
-		output, err = e.execSet(step)
-	case "sleep":
-		output, err = e.execSleep(step)
-		result.SleepDuration = step.Duration
-	case "log":
-		output = e.execLog(step)
-		result.LogMessage = step.Message
-	case "parallel":
-		output, children, err = e.execParallel(step, depth, wfResult, stepID)
-	case "template":
-		output, err = e.execTemplate(step)
-	case "foreach":
+	}
+
+attemptLoop:
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Reset per-attempt state.
+		output = ""
+		children = nil
+		err = nil
+
+		switch step.Action {
+		case "shell":
+			output, err = e.execShell(step)
+			if step.Command != "" {
+				result.ShellCommand = step.Command
+			} else {
+				result.ShellCommand = step.Shell
+			}
+		case "http":
+			output, err = e.execHTTP(step)
+			result.HTTPUrl = step.URL
+			result.HTTPMethod = step.Method
+		case "condition":
+			var execChildren, skippedChildren []StepResult
+			output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult, stepID)
+			result.ConditionResult = &condResult
+			result.Expression = step.Expression
+			if condResult {
+				result.ThenChildren = execChildren
+				result.ElseChildren = skippedChildren
+			} else {
+				result.ElseChildren = execChildren
+				result.ThenChildren = skippedChildren
+			}
+			children = nil
+		case "set":
+			output, err = e.execSet(step)
+		case "sleep":
+			output, err = e.execSleep(step)
+			result.SleepDuration = step.Duration
+		case "log":
+			output = e.execLog(step)
+			result.LogMessage = step.Message
+		case "parallel":
+			output, children, err = e.execParallel(step, depth, wfResult, stepID)
+		case "template":
+			output, err = e.execTemplate(step)
+		case "foreach":
 			sr := e.executeForeach(step, depth, wfResult, stepID)
 			output = sr.Output
 			children = sr.Children
 			if sr.Status == "failed" {
 				err = fmt.Errorf("%s", sr.Error)
 			}
-	case "ai":
-		output, err = e.execAI(step, stepID, depth, parentID)
-		result.Nondeterministic = true
-	case "ai_decide":
-		decided, derr := e.execAIDecide(step, stepID, depth, parentID)
-		if derr != nil {
-			err = derr
-		} else {
-			result.ConditionResult = &decided
-			output = fmt.Sprintf("decided: %v", decided)
+		case "ai":
+			output, err = e.execAI(step, stepID, depth, parentID)
+			result.Nondeterministic = true
+		case "ai_decide":
+			decided, derr := e.execAIDecide(step, stepID, depth, parentID)
+			if derr != nil {
+				err = derr
+			} else {
+				result.ConditionResult = &decided
+				output = fmt.Sprintf("decided: %v", decided)
+			}
+			result.Nondeterministic = true
+		default:
+			err = fmt.Errorf("unknown action: %s", step.Action)
 		}
-		result.Nondeterministic = true
-	default:
-		err = fmt.Errorf("unknown action: %s", step.Action)
+
+		if err == nil {
+			result.Retries = attempt
+			break attemptLoop // success
+		}
+		if attempt < maxAttempts-1 {
+			if e.verbose {
+				fmt.Printf("%s  ↻ retrying %s (attempt %d/%d) after %s\n", indent, step.Name, attempt+2, maxAttempts, retryDelay)
+			}
+			if retryDelay > 0 {
+				time.Sleep(retryDelay)
+			}
+		} else {
+			result.Retries = attempt
+		}
 	}
 
 	// Set children for parallel/foreach/condition
