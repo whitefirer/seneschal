@@ -14,20 +14,23 @@
 | 3 | 助手(chat / generate / explain / fix) | ✅ 完成 | 2 |
 | 4 | 持久化与智能重放 | ✅ 完成 | 2 |
 | 5 | 前端 AI 集成(Web chat + ai_token 流式 + 助手 + JSON/HTML) | ✅ 完成 | 2, 3 |
-| 5.5 | Artifact 管理 | 📋 计划 | 4 |
-| 6 | 重试与可靠性(provider 重试 + step retry) | 📋 计划 | 2 |
-| 7 | Token 治理(budget/配额/记忆窗口) | 📋 计划 | 2 |
-| 8 | Inline script action(step 内嵌代码) | 📋 计划 | — |
-| 8.5 | 变量脱敏(敏感数据保护) | 📋 计划 | 5 |
-| 9 | IM 渠道(飞书等) | 📋 计划 | 2, 3, 5 |
-| 10 | 容错(on_error: ai) | 📋 计划 | 2, 6 |
-| 11 | 更多 provider(OpenAI 兼容 / Ollama) | 📋 计划 | 2 |
-| 12 | 执行沙箱(sandbox/WASM/docker) | 📋 计划 | 5.5, 8 |
-| 13 | Playbook(可分享可执行文档) | 📋 计划 | 9 |
-| 14 | 项目文档站点(VitePress + asciinema) | 📋 计划 | — |
-| 15 | Hook 与通知(hook/通知渠道) | 📋 计划 | 5.5, 9 |
-| 16 | 前端架构优化(组件拆分/JSON tag 统一) | 📋 计划 | 5 |
-| 17 | (暂缓)AI 动态编排 | 🅿️ 暂缓 | 全部 |
+| 6 | 重试与可靠性(provider 重试 + step retry) | ✅ 完成 | 2 |
+| 7 | Token 治理(budget/配额/记忆窗口) | ✅ 完成 | 2 |
+| 8 | Inline script action(step 内嵌代码) | ✅ 完成 | — |
+| 8.5 | 加固(测试/mock provider/bundle 优化) | ✅ 完成 | — |
+| 9 | Tool Use(agent 自主工具循环) | ✅ 完成 | 2 |
+| 10 | 容错(on_error: ai) | ✅ 完成 | 2, 6 |
+| 10.5 | 子工作流 + AI 结构化输出 | 📋 计划 | 10 |
+| 11 | Artifact 管理 | 📋 计划 | 4 |
+| 11.5 | 变量脱敏(敏感数据保护) | 📋 计划 | 5 |
+| 12 | IM 渠道(飞书等) | 📋 计划 | 2, 3, 5 |
+| 13 | 更多 provider(OpenAI 兼容 / Ollama) | 📋 计划 | 2 |
+| 14 | 执行沙箱(sandbox/WASM/docker) | 📋 计划 | 11, 8 |
+| 15 | Playbook(可分享可执行文档) | 📋 计划 | 12 |
+| 16 | 项目文档站点(VitePress + asciinema) | 📋 计划 | — |
+| 17 | Hook 与通知(hook/通知渠道) | 📋 计划 | 11, 12 |
+| 18 | 前端架构优化(组件拆分/通知系统) | 📋 计划 | 5 |
+| 19 | (暂缓)AI 动态编排 | 🅿️ 暂缓 | 全部 |
 
 ---
 
@@ -291,7 +294,43 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
 
 ---
 
-## Phase 11 — 更多 provider
+## Phase 10.5 — 子工作流 + AI 结构化输出 📋 计划
+
+**目标**：让 AI 能输出结构化参数给下游 step；让工作流能调用其他工作流，实现复杂编排。
+
+### AI 结构化输出（save_output_format: json）
+- [ ] Step 加 `save_output_format: json` 字段
+- [ ] 当声明 json 时，引擎 `json.Unmarshal` AI 输出，每个 key 自动展开为 `var.key` 嵌套变量
+- [ ] 下游可直接 `{{.plan.region}}` / `{{.plan.replicas}}` 引用
+- [ ] 工量小（几十行），解决 AI → 结构化参数的表达力缺口
+
+### 子工作流调用（workflow action）
+- [ ] 新 action 类型 `workflow`：调用另一个 workflow YAML 文件
+- [ ] 递归创建新 Executor 实例，变量作用域隔离
+- [ ] `variables:` 传入初始变量，`save_output:` 取回输出
+- [ ] 自动获得 DAG 编排能力（`workflow` action + DAG = 多工作流依赖）
+- [ ] 自动获得并行能力（`workflow` action + `parallel` = 并行多工作流）
+
+### 用法
+```yaml
+# AI 输出结构化参数
+- name: plan
+  action: ai
+  prompt: "返回 JSON: {region, replicas, strategy}"
+  save_output: plan
+  save_output_format: json
+
+# 子工作流调用
+- name: deploy
+  action: workflow
+  file: deploy.yaml
+  variables: {env: "{{.env}}", region: "{{.plan.region}}"}
+  save_output: deploy_result
+```
+
+---
+
+## Phase 11 — Artifact 管理
 
 **目标**:覆盖更多模型生态。
 

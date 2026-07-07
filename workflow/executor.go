@@ -48,6 +48,7 @@ type Executor struct {
 	themeName      string              // theme name
 	tuiStyle       string              // TUI style: "hermes" or "claude"
 	forceColor     bool                // force color output even if not a terminal
+	workflowDir    string              // directory of the current workflow file (for sub-workflow relative paths)
 	// AI integration (Phase 2). aiProvider is set via SetAIProvider or built
 	// from the workflow's ai: config in Execute(). The ai* fields hold
 	// workflow-level defaults; steps may override per-step in M3+.
@@ -931,6 +932,9 @@ errorRecovery:
 			result.Nondeterministic = true
 		case "script":
 			output, err = e.execScript(step)
+			result.SideEffecting = true
+		case "workflow":
+			output, children, err = e.execWorkflow(step)
 			result.SideEffecting = true
 		default:
 			err = fmt.Errorf("unknown action: %s", step.Action)

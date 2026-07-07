@@ -153,6 +153,10 @@ func ValidateStep(step Step, index int) []error {
 		if step.Code == "" {
 			errs = append(errs, fmt.Errorf("step[%d] (%s): script action requires 'code'", index, step.Name))
 		}
+	case "workflow":
+		if step.Source == "" {
+			errs = append(errs, fmt.Errorf("step[%d] (%s): workflow action requires 'source' (path to sub-workflow YAML)", index, step.Name))
+		}
 	case "ai_decide":
 		if step.Question == "" {
 			errs = append(errs, fmt.Errorf("step[%d] (%s): ai_decide action requires 'question'", index, step.Name))
