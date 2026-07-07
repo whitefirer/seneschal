@@ -193,9 +193,11 @@ type anthropicContent struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 	// tool_result block (in user messages, answering a tool_use)
+	// Per Anthropic API spec, tool_result content goes in "content" not "text".
+	// We use Content for tool_result payload; Text is reused for text blocks.
 	ToolUseID string `json:"tool_use_id,omitempty"`
-	// IsError marks a failed tool result.
-	IsError bool `json:"is_error,omitempty"`
+	Content   string `json:"content,omitempty"` // tool_result: the result text
+	IsError   bool   `json:"is_error,omitempty"`
 }
 
 // buildAnthropicMessages converts the Request into Anthropic-format messages:
@@ -451,7 +453,7 @@ func RawMessageWithToolResults(results []ToolResult) AnthropicRawMessage {
 		msg.Content = append(msg.Content, AnthropicRawContent{
 			Type:      "tool_result",
 			ToolUseID: r.ToolUseID,
-			Text:      r.Output,
+			Content:   r.Output, // Anthropic API: tool_result content goes here
 			IsError:   r.IsError,
 		})
 	}
