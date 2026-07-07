@@ -195,25 +195,21 @@ export default function ChatPanel() {
                   ))}
                 </div>
               )}
-              {m.content && <MarkdownView content={m.content} />}
               {m.thinking && !m.content && (!m.toolSteps || m.toolSteps.length === 0) && (
                 <span className="text-sm text-muted-foreground animate-pulse">思考中…</span>
               )}
+              {/* Selection card (with inline exec progress if running) */}
               {m.selection && m.selection.workflow && (
                 <SelectionCard
                   selection={m.selection}
                   onRun={() => runSelection(i, m.selection!)}
                   loading={loading}
                   onNavigate={(id) => navigate(`/execution/${id}`)}
-                />
-              )}
-              {(m as any).executionId && (
-                <ExecProgress
                   execId={(m as any).executionId}
-                  onNavigate={(id) => navigate(`/execution/${id}`)}
-                  onRerun={() => runSelection(i, m.selection!)}
                 />
               )}
+              {/* AI text response — after the card */}
+              {m.content && <div className="mt-2"><MarkdownView content={m.content} /></div>}
             </div>
             {m.role === 'user' && (
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">
@@ -287,14 +283,14 @@ function ToolStepView({ step }: { step: ToolStep }) {
 
 // ── Selection card: collapsed by default, expandable, inline exec progress ──
 
-function SelectionCard({ selection, onRun, loading, onNavigate }: {
+function SelectionCard({ selection, onRun, loading, onNavigate, execId }: {
   selection: ChatSelection
   onRun: () => void
   loading: boolean
   onNavigate: (id: string) => void
+  execId?: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const execId = (selection as any).executionId as string | undefined
   // Lightweight status poll for the collapsed view (only when collapsed +
   // has execId). When expanded, ExecProgress does its own 2s polling.
   const [collapsedStatus, setCollapsedStatus] = useState<string>('')
