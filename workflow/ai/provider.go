@@ -97,6 +97,10 @@ type Response struct {
 	// reports them (0 if unknown).
 	InputTokens  int
 	OutputTokens int
+
+	// Retries is the number of automatic retries that occurred (provider-level
+	// exponential backoff on 429/5xx/timeout). 0 = succeeded on first try.
+	Retries int
 }
 
 // HasToolCalls reports whether the response contains tool invocations that
