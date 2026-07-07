@@ -310,17 +310,25 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// enrichSelection parses a select_workflow tool result (JSON) and adds step
-// preview data so the frontend can render a selection card.
+// enrichSelection parses a select_workflow tool result and adds step preview
+// data so the frontend can render a selection card. The output may contain
+// a [JSON:{...}] marker appended by the tool executor.
 func (e *chatToolExecutor) enrichSelection(raw string) map[string]interface{} {
+	// Try to extract [JSON:...] marker first.
+	jsonStr := raw
+	if idx := strings.Index(raw, "[JSON:"); idx >= 0 {
+		rest := raw[idx+len("[JSON:"):]
+		if endIdx := strings.Index(rest, "]"); endIdx > 0 {
+			jsonStr = rest[:endIdx]
+		}
+	}
 	var sel ai.Selection
-	if err := json.Unmarshal([]byte(raw), &sel); err != nil {
+	if err := json.Unmarshal([]byte(jsonStr), &sel); err != nil {
 		return nil
 	}
 	if sel.Workflow == "" {
 		return nil
 	}
-	// Find fileName + step summary.
 	data := map[string]interface{}{
 		"workflow":   sel.Workflow,
 		"variables":  sel.Variables,
