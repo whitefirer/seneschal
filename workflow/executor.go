@@ -352,6 +352,7 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 	// Store workflow context for hooks.
 	e.workflowName = wf.Name
 	e.workflowHooks = wf.Hooks
+	result.SensitivePatterns = wf.Sensitive
 
 	// Validate workflow
 

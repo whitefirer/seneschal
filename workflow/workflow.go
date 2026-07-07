@@ -114,6 +114,11 @@ type Workflow struct {
 	AI AIConfig `yaml:"ai,omitempty"`
 	// Hooks are workflow-level lifecycle hooks (applied to all steps + workflow_end).
 	Hooks []HookConfig `yaml:"hooks,omitempty"`
+	// Sensitive lists variable names whose values should be masked (***) in
+	// display layers (execution detail, HTML report, history show, chat).
+	// The engine still uses real values at execution time — only presentation
+	// is affected. Supports glob patterns (e.g. "*_key", "*secret*").
+	Sensitive []string `yaml:"sensitive,omitempty"`
 }
 
 // StepResult holds the result of executing a single step.
@@ -172,4 +177,7 @@ type WorkflowResult struct {
 	// Token 统计(汇总所有 AI step 的消耗)
 	TotalInputTokens  int `json:"totalInputTokens,omitempty"`
 	TotalOutputTokens int `json:"totalOutputTokens,omitempty"`
+	// SensitivePatterns lists variable name patterns whose values are masked
+	// in display layers. Populated from Workflow.Sensitive at execution time.
+	SensitivePatterns []string `json:"-"`
 }

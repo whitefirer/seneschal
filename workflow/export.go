@@ -8,9 +8,11 @@ import (
 )
 
 // exportResult writes the WorkflowResult to stdout in the requested format
-// (JSON or HTML). Used by the --output json / --output html modes. The export
-// is the final output of a run, replacing the normal terminal progress view.
+// (JSON or HTML). Sensitive variables are masked before serialization.
 func exportResult(mode OutputMode, result *WorkflowResult) {
+	// Mask sensitive variables before any display output.
+	MaskWorkflowResult(result, result.SensitivePatterns)
+
 	switch mode {
 	case OutputModeJSON:
 		exportJSON(result)
