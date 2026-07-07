@@ -2,10 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,6 +53,8 @@ func main() {
 		cmdReplay(os.Args[2:])
 	case "history":
 		cmdHistory(os.Args[2:])
+	case "runbook":
+		cmdRunbook(os.Args[2:])
 	case "edit":
 		cmdEdit(os.Args[2:])
 	case "template":
@@ -960,6 +966,323 @@ func sortedKeys(m map[string]string) []string {
 		}
 	}
 	return keys
+}
+
+// cmdRunbook manages runbooks: list, show, trigger, create.
+func cmdRunbook(args []string) {
+	if len(args) == 0 {
+		fmt.Println(`Usage:
+  goworkflow runbook list [--dir DIR] [--server URL]
+  goworkflow runbook show <name> [--dir DIR] [--server URL]
+  goworkflow runbook trigger <name> [--var key=val ...] [--dir DIR] [--server URL]
+  goworkflow runbook create <name> --workflow <file> [--cron "..."] [--webhook "/path"] [--var key=val ...] [--dir DIR]`)
+		return
+	}
+
+	sub := args[0]
+	rest := args[1:]
+
+	// Parse common flags: --dir, --server
+	dir := "./runbooks"
+	serverURL := ""
+	vars := map[string]string{}
+	positional := []string{}
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--dir", "-d":
+			if i+1 < len(rest) {
+				dir = rest[i+1]
+				i++
+			}
+		case "--server", "-s":
+			if i+1 < len(rest) {
+				serverURL = rest[i+1]
+				i++
+			}
+		case "--var":
+			if i+1 < len(rest) {
+				kv := strings.SplitN(rest[i+1], "=", 2)
+				if len(kv) == 2 {
+					vars[kv[0]] = kv[1]
+				}
+				i++
+			}
+		default:
+			positional = append(positional, rest[i])
+		}
+	}
+
+	switch sub {
+	case "list":
+		runbookList(dir, serverURL)
+	case "show":
+		if len(positional) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: runbook name required")
+			os.Exit(1)
+		}
+		runbookShow(positional[0], dir, serverURL)
+	case "trigger":
+		if len(positional) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: runbook name required")
+			os.Exit(1)
+		}
+		runbookTrigger(positional[0], vars, dir, serverURL)
+	case "create":
+		if len(positional) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: runbook name required")
+			os.Exit(1)
+		}
+		runbookCreate(positional[0], rest, dir)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown runbook subcommand: %s\n", sub)
+		os.Exit(1)
+	}
+}
+
+func runbookList(dir, serverURL string) {
+	if serverURL != "" {
+		// Query server API.
+		resp, err := http.Get(serverURL + "/api/runbooks")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		var result struct {
+			Success bool                     `json:"success"`
+			Data    []map[string]interface{} `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		if !result.Success || len(result.Data) == 0 {
+			fmt.Println("(no runbooks)")
+			return
+		}
+		fmt.Printf("%-25s  %-25s  %s\n", "NAME", "WORKFLOW", "TRIGGERS")
+		for _, rb := range result.Data {
+			name, _ := rb["Name"].(string)
+			wf, _ := rb["Workflow"].(string)
+			triggers := formatTriggersJSON(rb["Triggers"])
+			fmt.Printf("%-25s  %-25s  %s\n", name, wf, triggers)
+		}
+		return
+	}
+	// Local: scan dir.
+	mgr := workflow.NewRunbookManager(dir, ".", nil, nil)
+	mgr.LoadDir()
+	runbooks := mgr.List()
+	if len(runbooks) == 0 {
+		fmt.Println("(no runbooks)")
+		return
+	}
+	fmt.Printf("%-25s  %-25s  %s\n", "NAME", "WORKFLOW", "TRIGGERS")
+	for _, rb := range runbooks {
+		fmt.Printf("%-25s  %-25s  %s\n", rb.Name, rb.Workflow, formatTriggers(rb.Triggers))
+	}
+}
+
+func runbookShow(name, dir, serverURL string) {
+	if serverURL != "" {
+		resp, err := http.Get(serverURL + "/api/runbooks/" + name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		var result struct {
+			Success bool                   `json:"success"`
+			Data    map[string]interface{} `json:"data"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		if !result.Success {
+			fmt.Fprintln(os.Stderr, "Runbook not found")
+			os.Exit(1)
+		}
+		data, _ := json.MarshalIndent(result.Data, "", "  ")
+		fmt.Println(string(data))
+		return
+	}
+	mgr := workflow.NewRunbookManager(dir, ".", nil, nil)
+	mgr.LoadDir()
+	rb := mgr.Get(name)
+	if rb == nil {
+		fmt.Fprintln(os.Stderr, "Runbook not found")
+		os.Exit(1)
+	}
+	fmt.Printf("Name:     %s\n", rb.Name)
+	fmt.Printf("Workflow: %s\n", rb.Workflow)
+	fmt.Printf("Triggers: %s\n", formatTriggers(rb.Triggers))
+	if len(rb.Variables) > 0 {
+		fmt.Println("Variables:")
+		for k, v := range rb.Variables {
+			fmt.Printf("  %s = %s\n", k, v)
+		}
+	}
+}
+
+func runbookTrigger(name string, vars map[string]string, dir, serverURL string) {
+	if serverURL != "" {
+		body, _ := json.Marshal(vars)
+		resp, err := http.Post(serverURL+"/api/runbooks/"+name+"/trigger", "application/json", bytes.NewReader(body))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		var result struct {
+			Success bool   `json:"success"`
+			Error   string `json:"error"`
+		}
+		json.NewDecoder(resp.Body).Decode(&result)
+		if !result.Success {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Triggered: %s\n", name)
+		return
+	}
+	// Local: resolve and execute directly.
+	mgr := workflow.NewRunbookManager(dir, ".", nil, nil)
+	mgr.LoadDir()
+	rb := mgr.Get(name)
+	if rb == nil {
+		fmt.Fprintf(os.Stderr, "Runbook %q not found\n", name)
+		os.Exit(1)
+	}
+	wfPath, err := mgr.ResolveWorkflowPath(rb)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	wf, err := workflow.ParseFile(wfPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	// Merge variables.
+	allVars := make(map[string]string)
+	for k, v := range rb.Variables {
+		allVars[k] = v
+	}
+	for k, v := range vars {
+		allVars[k] = v
+	}
+	executor := workflow.NewExecutor(allVars)
+	executor.SetVerbose(true)
+	executor.SetOutputMode(workflow.ParseOutputMode("rich"))
+	executor.SetTheme("default")
+	result := executor.Execute(wf)
+	if result != nil && result.Status == "failed" && result.Error != "" {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+		os.Exit(1)
+	}
+}
+
+func runbookCreate(name string, args []string, dir string) {
+	// Parse create-specific flags.
+	wfFile := ""
+	cron := ""
+	webhookPath := ""
+	vars := map[string]string{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--workflow", "-w":
+			if i+1 < len(args) {
+				wfFile = args[i+1]
+				i++
+			}
+		case "--cron":
+			if i+1 < len(args) {
+				cron = args[i+1]
+				i++
+			}
+		case "--webhook":
+			if i+1 < len(args) {
+				webhookPath = args[i+1]
+				i++
+			}
+		case "--var":
+			if i+1 < len(args) {
+				kv := strings.SplitN(args[i+1], "=", 2)
+				if len(kv) == 2 {
+					vars[kv[0]] = kv[1]
+				}
+				i++
+			}
+		}
+	}
+	if wfFile == "" {
+		fmt.Fprintln(os.Stderr, "Error: --workflow is required")
+		os.Exit(1)
+	}
+
+	// Build runbook YAML.
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "name: %s\n", name)
+	fmt.Fprintf(&sb, "workflow: %s\n", wfFile)
+	fmt.Fprintf(&sb, "triggers:\n")
+	fmt.Fprintf(&sb, "  - type: manual\n")
+	if cron != "" {
+		fmt.Fprintf(&sb, "  - type: cron\n")
+		fmt.Fprintf(&sb, "    cron: \"%s\"\n", cron)
+	}
+	if webhookPath != "" {
+		fmt.Fprintf(&sb, "  - type: webhook\n")
+		fmt.Fprintf(&sb, "    path: \"%s\"\n", webhookPath)
+	}
+	if len(vars) > 0 {
+		fmt.Fprintf(&sb, "variables:\n")
+		for k, v := range vars {
+			fmt.Fprintf(&sb, "  %s: %s\n", k, v)
+		}
+	}
+
+	// Write file.
+	os.MkdirAll(dir, 0755)
+	path := filepath.Join(dir, name+".yaml")
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Created runbook: %s\n", path)
+	fmt.Println(sb.String())
+}
+
+func formatTriggers(triggers []workflow.TriggerConfig) string {
+	var parts []string
+	for _, t := range triggers {
+		switch t.Type {
+		case workflow.TriggerManual:
+			parts = append(parts, "manual")
+		case workflow.TriggerCron:
+			parts = append(parts, "cron:"+t.Cron)
+		case workflow.TriggerWebhook:
+			parts = append(parts, "webhook:"+t.Path)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatTriggersJSON(raw interface{}) string {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, item := range arr {
+		m, _ := item.(map[string]interface{})
+		t, _ := m["Type"].(string)
+		switch t {
+		case "manual":
+			parts = append(parts, "manual")
+		case "cron":
+			c, _ := m["Cron"].(string)
+			parts = append(parts, "cron:"+c)
+		case "webhook":
+			p, _ := m["Path"].(string)
+			parts = append(parts, "webhook:"+p)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func cmdEdit(args []string) {
