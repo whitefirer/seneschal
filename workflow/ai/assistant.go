@@ -101,7 +101,10 @@ func (a *Assistant) Provider() Provider { return a.provider }
 //
 // maxRounds caps the number of tool-use rounds to prevent infinite loops
 // (default 10 if zero).
-func (a *Assistant) RunAgent(ctx context.Context, system, userMessage string, tools []ToolDef, executor ToolExecutor, maxRounds int, onEvent func(AgentEvent)) error {
+// RunAgent executes a multi-turn tool-use loop. priorMessages allows the
+// caller to pass conversation history so the agent has context from
+// previous turns. If nil, the conversation starts fresh.
+func (a *Assistant) RunAgent(ctx context.Context, system, userMessage string, tools []ToolDef, executor ToolExecutor, maxRounds int, priorMessages []AnthropicRawMessage, onEvent func(AgentEvent)) error {
 	if a.provider == nil {
 		return fmt.Errorf("assistant: no AI provider configured")
 	}
@@ -114,7 +117,9 @@ func (a *Assistant) RunAgent(ctx context.Context, system, userMessage string, to
 		// No tools: plain completion.
 		onEvent(AgentEvent{Type: "thinking"})
 		resp, err := a.provider.Complete(ctx, Request{
-			System: system, Prompt: userMessage,
+			System:   system,
+			Prompt:   userMessage,
+			Messages: priorMessagesToMessages(priorMessages),
 		})
 		if err != nil {
 			return err
@@ -133,9 +138,13 @@ func (a *Assistant) RunAgent(ctx context.Context, system, userMessage string, to
 	if ap, ok := a.provider.(interface{ GetModel() string }); ok {
 		model = ap.GetModel()
 	}
-	messages := []AnthropicRawMessage{
-		{Role: "user", Content: []AnthropicRawContent{{Type: "text", Text: userMessage}}},
-	}
+	// Build messages: prior conversation + current user message.
+	messages := make([]AnthropicRawMessage, 0, len(priorMessages)+1)
+	messages = append(messages, priorMessages...)
+	messages = append(messages, AnthropicRawMessage{
+		Role:    "user",
+		Content: []AnthropicRawContent{{Type: "text", Text: userMessage}},
+	})
 
 	onEvent(AgentEvent{Type: "thinking"})
 
@@ -186,6 +195,28 @@ func truncateForEvent(s string) string {
 		return s[:2000] + "...(截断)"
 	}
 	return s
+}
+
+// priorMessagesToMessages converts AnthropicRawMessage history to the plain
+// Message type used by Complete (non-tool path).
+func priorMessagesToMessages(raw []AnthropicRawMessage) []Message {
+	if len(raw) == 0 {
+		return nil
+	}
+	msgs := make([]Message, 0, len(raw))
+	for _, m := range raw {
+		// Flatten content blocks into a single string (best-effort for text).
+		var sb strings.Builder
+		for _, c := range m.Content {
+			if c.Type == "text" && c.Text != "" {
+				sb.WriteString(c.Text)
+			}
+		}
+		if sb.Len() > 0 {
+			msgs = append(msgs, Message{Role: m.Role, Content: sb.String()})
+		}
+	}
+	return msgs
 }
 
 // CandidateEntry is the assistant's view of a selectable workflow. It mirrors

@@ -34,6 +34,22 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build conversation history from the client-sent messages (if any).
+	// The frontend sends prior user+assistant turns so the agent has context.
+	var priorMessages []ai.AnthropicRawMessage
+	if len(req.History) > 0 {
+		for _, h := range req.History {
+			role := "user"
+			if h.Role == "assistant" {
+				role = "assistant"
+			}
+			priorMessages = append(priorMessages, ai.AnthropicRawMessage{
+				Role:    role,
+				Content: []ai.AnthropicRawContent{{Type: "text", Text: h.Content}},
+			})
+		}
+	}
+
 	provider, err := ai.BuildProvider(h.aiConfig)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResp("AI unavailable: "+err.Error()))
@@ -74,22 +90,22 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	system := `你是 goworkflow AI 助手。根据用户意图选择合适的工具。用中文回复。
 
+## 核心原则
+你是有上下文记忆的对话助手。用户可能在进行多轮对话——记住之前说了什么。
+
 ## 工具使用指南
-- **用户想运行/执行/部署/跑** → 直接调用 select_workflow，不要先 list
+- **用户想运行/执行/部署/跑** → 调用 select_workflow，找到后告诉用户找到了什么，让用户确认。不要直接调 run_workflow——等用户确认后再执行。
+- **用户确认了（如"好的"、"运行吧"、"继续"）** → 如果之前已选中了工作流，调用 run_workflow 执行。
 - **用户说"创建/生成/新建"** → 调用 generate_workflow
 - **用户想看有哪些** → 调用 list_workflows
 - **工具返回的结果是可信的** — 如果 list_workflows 返回了内容，说明系统里有工作流。不要说"没有工作流"
 
-## list_workflows 输出格式
-输出是纯文本列表，每行格式: "- <name> (<file>) | <description>"
-例如: "- basic (basic.yaml) | Basic actions: shell, log"
-这表示有一个名为 basic 的工作流。只要列表非空就说明有工作流。
+## 上下文记忆
+- 如果用户在上一轮说了"运行 basic"，这一轮说"你好"作为变量值，你应该理解这是在回答你之前的问题。
+- 不要在每轮都重新介绍自己。
+- 保持对话连贯性。`
 
-## select_workflow 返回格式
-返回 JSON: {"Workflow": "名称", "Variables": {...}, "Confidence": 0-1}
-如果 Workflow 非空，说明找到了匹配的工作流，告诉用户找到了。`
-
-	err = assistant.RunAgent(ctx, system, req.Message, ai.AgentTools(), exec, 8, func(ev ai.AgentEvent) {
+	err = assistant.RunAgent(ctx, system, req.Message, ai.AgentTools(), exec, 8, priorMessages, func(ev ai.AgentEvent) {
 		// Forward agent events as SSE. For tool_result, try to enrich
 		// selection/generate results so the frontend can render cards.
 		switch ev.Type {

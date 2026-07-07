@@ -146,19 +146,18 @@ export interface ChatSSEEvent {
 }
 
 export const chatApi = {
-  // sendMessage POSTs to /api/chat and streams SSE events back. EventSource
-  // only supports GET, so we use fetch + ReadableStream to parse the SSE
-  // stream manually. onEvent is called for each parsed event; returns when
-  // the stream ends (done/error) or the AbortSignal aborts.
+  // sendMessage POSTs to /api/chat and streams SSE events back.
+  // history is the prior conversation turns for context.
   sendMessage: async (
     message: string,
     onEvent: (event: ChatSSEEvent) => void,
     signal?: AbortSignal,
+    history?: { role: string; content: string }[],
   ): Promise<void> => {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, history }),
       signal,
     })
     if (!res.ok || !res.body) {

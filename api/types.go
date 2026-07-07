@@ -39,8 +39,15 @@ type RunRequest struct {
 
 // ChatRequest is the body for POST /api/chat.
 type ChatRequest struct {
-	Message string `json:"message"`           // user's natural-language intent
-	Dir     string `json:"dir,omitempty"`      // workflow directory; defaults to the server's workflows dir
+	Message string         `json:"message"`           // user's natural-language intent
+	Dir     string         `json:"dir,omitempty"`      // workflow directory
+	History []ChatMessage  `json:"history,omitempty"`  // prior conversation turns
+}
+
+// ChatMessage is one turn of conversation history sent from the frontend.
+type ChatMessage struct {
+	Role    string `json:"role"`    // "user" or "assistant"
+	Content string `json:"content"`
 }
 
 type ExecutionRecord struct {

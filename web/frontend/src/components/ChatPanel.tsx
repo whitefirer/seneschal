@@ -66,6 +66,13 @@ export default function ChatPanel() {
     const msg = input.trim()
     if (!msg || loading) return
     setInput('')
+
+    // Build conversation history from existing messages (excluding the
+    // placeholder we're about to add). Only include messages with content.
+    const history = messages
+      .filter(m => m.content && m.content.trim())
+      .map(m => ({ role: m.role, content: m.content }))
+
     setMessages((prev) => [...prev, { role: 'user', content: msg }])
     setLoading(true)
     setMessages((prev) => [...prev, { role: 'assistant', content: '', thinking: true }])
@@ -125,7 +132,7 @@ export default function ChatPanel() {
             return next
           })
         }
-      }, ac.signal)
+      }, ac.signal, history)
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setMessages((prev) => {
