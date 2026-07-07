@@ -22,6 +22,9 @@ type ServerConfig struct {
 	// Defaults to "./executions". Contains potentially sensitive data and is
 	// gitignored — do not commit this directory.
 	ExecutionsDir  string   `yaml:"executions_dir"`
+	// RunbooksDir is where runbook (trigger/schedule) files live.
+	// Defaults to "./runbooks". Hot-reloaded by the server.
+	RunbooksDir    string   `yaml:"runbooks_dir"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
 	// AI is the server-level AI configuration. Serves as the global default
 	// for all workflows; a workflow's ai: block overrides per-workflow, and
@@ -63,6 +66,7 @@ func Default() *ServerConfig {
 		Port:          "8888",
 		WorkflowsDir:  "./workflows/user",
 		ExecutionsDir: "./executions",
+		RunbooksDir:   "./runbooks",
 		AllowedOrigins: []string{
 			"http://localhost:8888",
 			"http://localhost:5173",
