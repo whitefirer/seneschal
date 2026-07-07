@@ -16,6 +16,7 @@ type Step struct {
 	ContinueOnError bool             `yaml:"continue_on_error"`
 	Retry           int              `yaml:"retry,omitempty"`           // max retries on failure (0 = no retry)
 	RetryDelay      string           `yaml:"retry_delay,omitempty"`     // delay between retries, e.g. "5s"
+	TokenQuota      int              `yaml:"token_quota,omitempty"`     // max total tokens for this AI step (0 = unlimited)
 	Description    string            `yaml:"description,omitempty"`
 
 	// Shell action
@@ -137,7 +138,9 @@ type StepResult struct {
 	// SideEffecting:本步有副作用但可复现(shell/http/template 写盘)
 	Nondeterministic bool `json:"nondeterministic,omitempty"`
 	SideEffecting    bool `json:"sideEffecting,omitempty"`
-	Retries          int  `json:"retries,omitempty"` // actual retries performed (step-level)
+	Retries          int  `json:"retries,omitempty"`          // actual retries performed (step-level)
+	InputTokens      int  `json:"inputTokens,omitempty"`      // AI step: billed input tokens
+	OutputTokens     int  `json:"outputTokens,omitempty"`     // AI step: billed output tokens
 }
 
 // WorkflowResult holds the result of executing a workflow.
@@ -152,4 +155,7 @@ type WorkflowResult struct {
 	// Nondeterministic:整条 workflow 是否含非确定步骤(AI 及其下游)
 	// 由引擎传播算法推导,Phase 2 实现
 	Nondeterministic bool `json:"nondeterministic,omitempty"`
+	// Token 统计(汇总所有 AI step 的消耗)
+	TotalInputTokens  int `json:"totalInputTokens,omitempty"`
+	TotalOutputTokens int `json:"totalOutputTokens,omitempty"`
 }

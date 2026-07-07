@@ -100,6 +100,13 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 		return "", fmt.Errorf("ai step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
 	}
 
+	// Budget check: skip if cumulative usage already exceeds the workflow budget.
+	if e.aiBudget > 0 && e.cumulativeTokens >= e.aiBudget {
+		e.lastAIInputTokens = 0
+		e.lastAIOutputTokens = 0
+		return "(skipped: token budget exceeded)", nil
+	}
+
 	prompt, err := e.context.ResolveTemplate(step.Prompt)
 	if err != nil {
 		return "", fmt.Errorf("ai step '%s': resolve prompt template: %w", step.Name, err)
@@ -131,8 +138,12 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 			}
 		}
 	} else {
-		// Default: all accumulated AI history.
+		// Default: all accumulated AI history (truncated to memory window if set).
 		messages = e.aiHistory
+		if e.aiMemoryWindow > 0 && len(messages) > e.aiMemoryWindow*2 {
+			// Keep only the last N*2 messages (each turn = user + assistant).
+			messages = messages[len(messages)-e.aiMemoryWindow*2:]
+		}
 	}
 
 	// Extract inputs and inject any unreferenced ones into the prompt.
@@ -174,6 +185,12 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	}
 	e.context.SetResult(step.Name, resp.Text)
 
+	// Store token counts for executeStep to record on StepResult.
+	e.lastAIInputTokens = resp.InputTokens
+	e.lastAIOutputTokens = resp.OutputTokens
+	// Accumulate into the workflow budget tracker.
+	e.cumulativeTokens += resp.InputTokens + resp.OutputTokens
+
 	// Accumulate this turn into the AI history so downstream AI steps (without
 	// explicit memory) see it as conversation context.
 	e.aiHistory = append(e.aiHistory,
@@ -200,6 +217,13 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID string) (bool, error) {
 	if e.aiProvider == nil {
 		return false, fmt.Errorf("ai_decide step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
+	}
+
+	// Budget check.
+	if e.aiBudget > 0 && e.cumulativeTokens >= e.aiBudget {
+		e.lastAIInputTokens = 0
+		e.lastAIOutputTokens = 0
+		return false, nil
 	}
 
 	question, err := e.context.ResolveTemplate(step.Question)
@@ -257,6 +281,11 @@ func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID st
 	if step.SaveOutput != "" {
 		e.context.Set(step.SaveOutput, strconv.FormatBool(result))
 	}
+
+	// Store token counts for executeStep to record on StepResult.
+	e.lastAIInputTokens = resp.InputTokens
+	e.lastAIOutputTokens = resp.OutputTokens
+	e.cumulativeTokens += resp.InputTokens + resp.OutputTokens
 	e.context.SetResult(step.Name, strconv.FormatBool(result))
 
 	return result, nil

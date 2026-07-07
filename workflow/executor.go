@@ -54,10 +54,15 @@ type Executor struct {
 	aiModel       string
 	aiMaxTokens   int
 	aiTemperature float64
-	// AI conversation history accumulated within one execution. Each ai /
-	// ai_decide step appends its prompt + response so downstream AI steps see
-	// prior turns (unless step.Memory overrides this).
+	// AI conversation history accumulated within one execution.
 	aiHistory []ai.Message
+	// last AI token counts (set by execAI, read by executeStep dispatch)
+	lastAIInputTokens  int
+	lastAIOutputTokens int
+	// cumulative AI token usage across all steps in this execution
+	cumulativeTokens  int
+	aiBudget          int // workflow-level token budget (0 = unlimited)
+	aiMemoryWindow    int // max prior AI turns to keep (0 = unlimited)
 	// Replay cache (Phase 4): maps step ID (or Name fallback) to a stored
 	// StepResult. When non-nil, executeStep returns the cached result for
 	// deterministic steps instead of re-executing them. AI / nondeterministic
@@ -324,6 +329,8 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		e.aiMaxTokens = wf.AI.MaxTokens
 	}
 	e.aiTemperature = wf.AI.Temperature
+	e.aiBudget = wf.AI.Budget
+	e.aiMemoryWindow = wf.AI.MemoryWindow
 
 	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", 0, "", nil)
 
@@ -739,6 +746,9 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 	// ai/ai_decide step becomes Nondeterministic itself (taint along
 	// DependsOn). Also derives the workflow-level flag.
 	result.Nondeterministic = propagateDeterminism(result.Steps)
+
+	// Sum token usage across all steps (including nested children).
+	result.TotalInputTokens, result.TotalOutputTokens = sumTokenUsage(result.Steps)
 }
 
 // executeStep executes a single step.
@@ -920,12 +930,15 @@ attemptLoop:
 	result.Children = children
 
 	// 填充确定性标记初值(见 docs/PRODUCT.md 的"三种确定性层级")
-	// 传播算法在 Phase 2 实现,这里只标 SideEffecting
 	switch step.Action {
 	case "shell", "http", "template":
 		result.SideEffecting = true
+	case "ai", "ai_decide":
+		result.Nondeterministic = true
+		// Record token usage from the last AI call.
+		result.InputTokens = e.lastAIInputTokens
+		result.OutputTokens = e.lastAIOutputTokens
 	}
-	// ai / ai_decide 在 Phase 2 加 case 时填 Nondeterministic = true
 
 	result.EndTime = Now()
 	

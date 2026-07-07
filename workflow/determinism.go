@@ -67,8 +67,7 @@ func propagateDeterminism(steps []StepResult) bool {
 	return any
 }
 
-// propagateContainer recurses into a step's child slices (Children for
-// parallel/foreach, ThenChildren/ElseChildren for condition), propagates
+// propagateContainer recurses into a step's child slices (Children for// parallel/foreach, ThenChildren/ElseChildren for condition), propagates
 // determinism within each, and marks the container Nondeterministic if any
 // child is.
 func propagateContainer(s *StepResult) {
@@ -87,4 +86,31 @@ func propagateContainer(s *StepResult) {
 			s.Nondeterministic = true
 		}
 	}
+}
+
+// sumTokenUsage recursively sums InputTokens + OutputTokens across a step tree
+// (including nested children/branches), returning (inputTotal, outputTotal).
+func sumTokenUsage(steps []StepResult) (int, int) {
+	var in, out int
+	for i := range steps {
+		s := &steps[i]
+		in += s.InputTokens
+		out += s.OutputTokens
+		if len(s.Children) > 0 {
+			ci, co := sumTokenUsage(s.Children)
+			in += ci
+			out += co
+		}
+		if len(s.ThenChildren) > 0 {
+			ci, co := sumTokenUsage(s.ThenChildren)
+			in += ci
+			out += co
+		}
+		if len(s.ElseChildren) > 0 {
+			ci, co := sumTokenUsage(s.ElseChildren)
+			in += ci
+			out += co
+		}
+	}
+	return in, out
 }

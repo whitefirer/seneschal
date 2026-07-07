@@ -35,6 +35,16 @@ type Config struct {
 
 	// Temperature is the default sampling temperature. Defaults to 0.
 	Temperature float64 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+
+	// Budget is the workflow-level total token budget (input + output combined).
+	// 0 = unlimited (default). When the cumulative token usage across all AI
+	// steps in a workflow exceeds this, subsequent AI steps are skipped.
+	Budget int `yaml:"budget,omitempty" json:"budget,omitempty"`
+
+	// MemoryWindow is the max number of prior AI turns to include as context
+	// for each AI step (0 = unlimited, default). Older turns are truncated.
+	// Each turn = one user + one assistant message (2 items in aiHistory).
+	MemoryWindow int `yaml:"memory_window,omitempty" json:"memory_window,omitempty"`
 }
 
 // IsZero reports whether no AI configuration was provided.
