@@ -108,6 +108,15 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			if ev.Tool == "generate_workflow" {
 				data["yaml"] = ev.Output
 			}
+			if ev.Tool == "run_workflow" {
+				// Extract executionId from [EXEC_ID:xxx] marker for frontend.
+				if idx := strings.Index(ev.Output, "[EXEC_ID:"); idx >= 0 {
+					rest := ev.Output[idx+len("[EXEC_ID:"):]
+					if endIdx := strings.Index(rest, "]"); endIdx > 0 {
+						data["executionId"] = rest[:endIdx]
+					}
+				}
+			}
 			sendEvent("tool_result", data)
 		case "text":
 			sendEvent("text", map[string]string{"content": ev.Output})
@@ -232,7 +241,11 @@ func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (stri
 		}
 		executor := workflow.NewExecutor(vars)
 		result := executor.Execute(wf)
-		return fmt.Sprintf("执行 %s: %s (%d 步)", wf.Name, result.Status, len(result.Steps)), nil
+		// Return human-readable result + executionId for frontend.
+		execID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHex(4))
+		summary := fmt.Sprintf("工作流 %s 执行完成: %s (%d 步, %s)\n执行ID: %s\n可在 /execution/%s 查看详情\n[EXEC_ID:%s]",
+			wf.Name, result.Status, len(result.Steps), result.EndTime, execID, execID, execID)
+		return summary, nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
@@ -245,6 +258,10 @@ func candidateList(cs []ai.CandidateEntry) string {
 		parts = append(parts, c.Name)
 	}
 	return strings.Join(parts, ", ")
+}
+
+func indexOf(s, substr string) int {
+	return strings.Index(s, substr)
 }
 
 // enrichSelection parses a select_workflow tool result (JSON) and adds step
