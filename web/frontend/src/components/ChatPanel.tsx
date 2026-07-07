@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Send, Bot, User, Loader2, Play, Sparkles, GitBranch, ChevronDown, ChevronRight, ExternalLink, X, CheckCircle, XCircle, Clock } from 'lucide-react'
+import { Send, Bot, User, Loader2, Play, Sparkles, GitBranch, ChevronDown, ChevronRight, ExternalLink, X, CheckCircle, XCircle, Clock, RotateCw, FileCode } from 'lucide-react'
 import { chatApi, workflowsApi, executionsApi, type ChatSelection, type ChatStep } from '@/api/client'
 import { MarkdownView } from './MarkdownView'
 
@@ -205,21 +205,56 @@ function SelectionCard({ selection, onRun, loading, onNavigate }: {
 }) {
   const [expanded, setExpanded] = useState(false)
   const execId = (selection as any).executionId as string | undefined
+  // Lightweight status poll for the collapsed view (only when collapsed +
+  // has execId). When expanded, ExecProgress does its own 2s polling.
+  const [collapsedStatus, setCollapsedStatus] = useState<string>('')
 
-  // Collapsed view: name + description + run button (or progress).
-  if (!expanded && !execId) {
+  useEffect(() => {
+    if (!execId || expanded) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const data = await executionsApi.get(execId)
+        if (!active) return
+        setCollapsedStatus(data.status)
+        if (data.status === 'running') timer = setTimeout(poll, 3000)
+      } catch { if (active) timer = setTimeout(poll, 3000) }
+    }
+    poll()
+    return () => { active = false; clearTimeout(timer) }
+  }, [execId, expanded])
+
+  // Collapsed view: name + status icon + action button.
+  // When no execution yet: show Run. When running: spinner. When done: result + rerun.
+  if (!expanded) {
+    const statusEl = collapsedStatus === 'running' ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+      : collapsedStatus === 'success' ? <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+      : collapsedStatus === 'failed' ? <XCircle className="w-3.5 h-3.5 text-red-500" />
+      : null
+
     return (
       <div className="mt-3 border border-border rounded-lg p-3 bg-background">
         <div className="flex items-center gap-2">
-          <button onClick={() => setExpanded(true)} className="flex items-center gap-1 flex-1 text-left">
+          <button onClick={() => setExpanded(true)} className="flex items-center gap-1 flex-1 text-left min-w-0">
             <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />
             <Sparkles className="w-4 h-4 text-primary flex-shrink-0" />
-            <span className="font-semibold text-sm">{selection.workflow}</span>
+            <span className="font-semibold text-sm truncate">{selection.workflow}</span>
+            {statusEl && <span className="flex-shrink-0">{statusEl}</span>}
+            {collapsedStatus === 'running' && <span className="text-xs text-muted-foreground">执行中…</span>}
           </button>
-          <button onClick={onRun} disabled={loading}
-            className="flex items-center gap-1 px-3 py-1 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
-            <Play className="w-3 h-3" /> 执行
-          </button>
+          {/* Action button depends on state */}
+          {!execId ? (
+            <button onClick={onRun} disabled={loading}
+              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 disabled:opacity-50">
+              <Play className="w-3 h-3" /> 执行
+            </button>
+          ) : collapsedStatus !== 'running' ? (
+            <button onClick={onRun} disabled={loading}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg border border-border text-muted-foreground text-xs hover:bg-muted">
+              <RotateCw className="w-3 h-3" /> 重跑
+            </button>
+          ) : null}
         </div>
       </div>
     )
@@ -238,13 +273,14 @@ function SelectionCard({ selection, onRun, loading, onNavigate }: {
         <span className="text-xs text-muted-foreground">置信度 {(selection.confidence * 100).toFixed(0)}%</span>
       </div>
 
-      {/* Step preview + mermaid toggle */}
-      {expanded && selection.steps && selection.steps.length > 0 && (
+      {/* Step preview + mermaid toggle — hidden once execution starts;
+          the ExecProgress section shows live step status instead. */}
+      {expanded && !execId && selection.steps && selection.steps.length > 0 && (
         <StepPreviewSection steps={selection.steps} />
       )}
 
-      {/* Variables */}
-      {expanded && Object.keys(selection.variables).length > 0 && (
+      {/* Variables — also hidden after execution to reduce noise. */}
+      {expanded && !execId && Object.keys(selection.variables).length > 0 && (
         <div>
           <p className="text-xs text-muted-foreground mb-1">变量:</p>
           <div className="space-y-0.5">
@@ -257,9 +293,19 @@ function SelectionCard({ selection, onRun, loading, onNavigate }: {
         </div>
       )}
 
+      {/* View YAML link (before execution) */}
+      {expanded && !execId && (selection.fileName || selection.workflow) && (
+        <a
+          href={`/editor/${selection.fileName || selection.workflow}`}
+          className="flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          <FileCode className="w-3 h-3" /> 查看 YAML
+        </a>
+      )}
+
       {/* Run button or inline execution progress */}
       {execId ? (
-        <ExecProgress execId={execId} onNavigate={onNavigate} />
+        <ExecProgress execId={execId} onNavigate={onNavigate} onRerun={onRun} />
       ) : (
         <button onClick={onRun} disabled={loading}
           className="w-full flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
@@ -307,9 +353,13 @@ function StepPreviewSection({ steps }: { steps: ChatStep[] }) {
 
 // ── Inline execution progress (polls /api/executions/{id}) ──────────────────
 
-function ExecProgress({ execId, onNavigate }: { execId: string; onNavigate: (id: string) => void }) {
+function ExecProgress({ execId, onNavigate, onRerun }: { execId: string; onNavigate: (id: string) => void; onRerun: () => void }) {
   const [exec, setExec] = useState<ExecState | null>(null)
-  const [collapsed, setCollapsed] = useState(false)
+  // Steps section: expanded while running, auto-collapse when done.
+  const [stepsCollapsed, setStepsCollapsed] = useState(false)
+  // Output section: collapsed while running, auto-expand when done.
+  const [outputCollapsed, setOutputCollapsed] = useState(true)
+  const prevStatusRef = useRef<string | undefined>()
 
   useEffect(() => {
     let active = true
@@ -320,12 +370,20 @@ function ExecProgress({ execId, onNavigate }: { execId: string; onNavigate: (id:
         const data = await executionsApi.get(execId)
         if (!active) return
         setExec({ id: execId, status: data.status, steps: data.steps })
-        // Continue polling if still running.
+        // Determine if we should switch to the "done" layout.
+        // This fires on running→done transition AND on first-load-if-already-done
+        // (e.g. page refresh when execution already completed).
+        const wasFirstLoad = prevStatusRef.current === undefined
+        const transitionedFromRunning = prevStatusRef.current === 'running'
+        if (data.status !== 'running' && (transitionedFromRunning || wasFirstLoad)) {
+          setStepsCollapsed(true)
+          setOutputCollapsed(false)
+        }
+        prevStatusRef.current = data.status
         if (data.status === 'running') {
           timer = setTimeout(poll, 2000)
         }
       } catch {
-        // Execution not found (may not be registered yet) — retry shortly.
         if (active) timer = setTimeout(poll, 2000)
       }
     }
@@ -333,65 +391,148 @@ function ExecProgress({ execId, onNavigate }: { execId: string; onNavigate: (id:
     return () => { active = false; clearTimeout(timer) }
   }, [execId])
 
+  const isDone = exec && exec.status !== 'running' && exec.status !== ''
   const statusIcon = exec?.status === 'success' ? <CheckCircle className="w-4 h-4 text-green-500" />
     : exec?.status === 'failed' ? <XCircle className="w-4 h-4 text-red-500" />
     : <Loader2 className="w-4 h-4 animate-spin text-primary" />
 
+  const outputSteps = exec?.steps ? collectOutputs(exec.steps) : []
+
   return (
-    <div className="border-t border-border pt-2 mt-2">
+    <div className="border-t border-border pt-2 mt-2 space-y-1">
       {/* Status header */}
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-center gap-2">
         {statusIcon}
         <span className="text-xs font-medium">
           {exec?.status === 'running' ? '执行中…' : exec?.status === 'success' ? '执行完成' : exec?.status === 'failed' ? '执行失败' : '准备中…'}
         </span>
-        <button onClick={() => setCollapsed(!collapsed)} className="text-xs text-muted-foreground hover:text-foreground ml-1">
-          {collapsed ? '展开' : '收起'}
-        </button>
+        {isDone && (
+          <button onClick={onRerun} className="flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground">
+            <RotateCw className="w-3 h-3" /> 重跑
+          </button>
+        )}
         <button onClick={() => onNavigate(execId)}
           className="ml-auto flex items-center gap-1 text-xs text-primary hover:underline">
           查看完整详情 <ExternalLink className="w-3 h-3" />
         </button>
       </div>
 
-      {/* Step list (collapsible, with hierarchy) */}
-      {!collapsed && exec?.steps && (
-        <div className="ml-6">
-          <ExecStepTree steps={exec.steps} depth={0} />
+      {/* Steps section first (auto-collapse when done) */}
+      <div className="ml-1">
+        <button onClick={() => setStepsCollapsed(!stepsCollapsed)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+          {stepsCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          执行步骤
+        </button>
+        {!stepsCollapsed && exec?.steps && (
+          <div className="ml-4 mt-0.5">
+            <ExecStepTree steps={exec.steps} depth={0} />
+          </div>
+        )}
+      </div>
+
+      {/* Output results section second (auto-expand when done) */}
+      {isDone && outputSteps.length > 0 && (
+        <div className="ml-1">
+          <button onClick={() => setOutputCollapsed(!outputCollapsed)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            {outputCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            输出结果 ({outputSteps.length})
+          </button>
+          {!outputCollapsed && (
+            <div className="ml-4 mt-1 space-y-1.5">
+              {outputSteps.map((s, i) => (
+                <div key={i} className="text-xs">
+                  <span className="text-muted-foreground font-medium">{s.name}</span>
+                  <pre className="mt-0.5 p-1.5 rounded bg-muted text-foreground whitespace-pre-wrap break-all max-h-40 overflow-y-auto text-[11px]">{s.output}</pre>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-// ExecStepTree renders execution steps with indentation preserving hierarchy
-// (children, then_children, else_children get progressively indented).
+// collectOutputs extracts steps that have meaningful output text (for the
+// output-results section). Skips steps with empty or trivial output.
+function collectOutputs(steps: any[]): { name: string; output: string }[] {
+  const out: { name: string; output: string }[] = []
+  for (const s of steps) {
+    if (s.output && s.output.trim() && s.output !== '(dry run)') {
+      out.push({ name: s.name, output: s.output })
+    }
+    if (s.children) out.push(...collectOutputs(s.children))
+    if (s.then_children) out.push(...collectOutputs(s.then_children))
+    if (s.else_children) out.push(...collectOutputs(s.else_children))
+  }
+  return out
+}
+
+// ExecStepTree renders execution steps with indentation. Container steps
+// (parallel/foreach) auto-collapse their children and show N/M completion.
 function ExecStepTree({ steps, depth }: { steps: any[]; depth: number }) {
   return (
-    <div className={depth > 0 ? 'ml-3 border-l border-border pl-2' : 'space-y-0.5'}>
+    <div className={depth > 0 ? 'ml-3 border-l border-border pl-2 space-y-0.5' : 'space-y-0.5'}>
       {steps.map((s: any, i: number) => (
-        <div key={i}>
-          <div className={`flex items-center gap-1.5 text-xs py-0.5 ${s.status === 'skipped' ? 'opacity-50' : ''}`}>
-            {s.status === 'success' ? <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />
-             : s.status === 'failed' ? <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
-             : s.status === 'running' ? <Loader2 className="w-3 h-3 animate-spin text-primary flex-shrink-0" />
-             : <Clock className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
-            <span className={s.status === 'skipped' ? 'text-muted-foreground line-through' : ''}>{s.name}</span>
-            {s.action && <span className="text-muted-foreground text-[10px]">({s.action})</span>}
-            {s.duration && s.duration !== '0s' && <span className="text-muted-foreground">{s.duration}</span>}
-          </div>
-          {/* Recurse into nested children with indentation */}
-          {s.children && s.children.length > 0 && (
-            <div className="mt-0.5"><ExecStepTree steps={s.children} depth={depth + 1} /></div>
-          )}
-          {s.then_children && s.then_children.length > 0 && (
-            <div className="mt-0.5"><span className="text-[10px] text-green-600 dark:text-green-400">✓ then:</span><ExecStepTree steps={s.then_children} depth={depth + 1} /></div>
-          )}
-          {s.else_children && s.else_children.length > 0 && (
-            <div className="mt-0.5"><span className="text-[10px] text-orange-600 dark:text-orange-400">✗ else:</span><ExecStepTree steps={s.else_children} depth={depth + 1} /></div>
-          )}
-        </div>
+        <ExecStepLine key={i} step={s} depth={depth} />
       ))}
+    </div>
+  )
+}
+
+function ExecStepLine({ step: s, depth }: { step: any; depth: number }) {
+  // Container steps (parallel/foreach/loop) with children: show as collapsible
+  // with completion count.
+  const childSteps = s.children || []
+  const isContainer = (s.action === 'parallel' || s.action === 'foreach' || s.action === 'loop') && childSteps.length > 0
+  const [containerCollapsed, setContainerCollapsed] = useState(isContainer && childSteps.length > 3)
+  const [showOutput, setShowOutput] = useState(false)
+
+  const completed = childSteps.filter((c: any) => c.status === 'success' || c.status === 'failed').length
+  const total = childSteps.length
+
+  return (
+    <div>
+      <div className={`flex items-center gap-1.5 text-xs py-0.5 ${s.status === 'skipped' ? 'opacity-50' : ''}`}>
+        {/* Container collapse toggle */}
+        {isContainer ? (
+          <button onClick={() => setContainerCollapsed(!containerCollapsed)}>
+            {containerCollapsed ? <ChevronRight className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+          </button>
+        ) : null}
+        {s.status === 'success' ? <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />
+         : s.status === 'failed' ? <XCircle className="w-3 h-3 text-red-500 flex-shrink-0" />
+         : s.status === 'running' ? <Loader2 className="w-3 h-3 animate-spin text-primary flex-shrink-0" />
+         : <Clock className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
+        <span className={s.status === 'skipped' ? 'text-muted-foreground line-through' : ''}>{s.name}</span>
+        {s.action && <span className="text-muted-foreground text-[10px]">({s.action})</span>}
+        {/* Container completion count */}
+        {isContainer && <span className="text-muted-foreground text-[10px]">{completed}/{total}</span>}
+        {s.duration && s.duration !== '0s' && <span className="text-muted-foreground">{s.duration}</span>}
+        {/* Output toggle for steps with output */}
+        {s.output && s.output.trim() && s.output !== '(dry run)' && (
+          <button onClick={() => setShowOutput(!showOutput)} className="text-muted-foreground hover:text-foreground text-[10px]">
+            {showOutput ? '收起' : '详情'}
+          </button>
+        )}
+      </div>
+      {/* Inline output */}
+      {showOutput && s.output && (
+        <pre className="ml-5 mt-0.5 p-1.5 rounded bg-muted text-foreground whitespace-pre-wrap break-all max-h-32 overflow-y-auto text-[11px]">{s.output}</pre>
+      )}
+      {/* Container children (collapsible) */}
+      {isContainer && !containerCollapsed && childSteps.length > 0 && (
+        <div className="mt-0.5"><ExecStepTree steps={childSteps} depth={depth + 1} /></div>
+      )}
+      {/* Non-container nested children */}
+      {(!isContainer || !containerCollapsed) && s.then_children && s.then_children.length > 0 && (
+        <div className="mt-0.5"><span className="text-[10px] text-green-600 dark:text-green-400">✓ then:</span><ExecStepTree steps={s.then_children} depth={depth + 1} /></div>
+      )}
+      {(!isContainer || !containerCollapsed) && s.else_children && s.else_children.length > 0 && (
+        <div className="mt-0.5"><span className="text-[10px] text-orange-600 dark:text-orange-400">✗ else:</span><ExecStepTree steps={s.else_children} depth={depth + 1} /></div>
+      )}
     </div>
   )
 }

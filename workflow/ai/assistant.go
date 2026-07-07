@@ -143,12 +143,15 @@ func (a *Assistant) SelectWorkflow(ctx context.Context, intent string, entries [
 
 	system := actionSchemaDoc + "\n\n## 输出规则\n只输出一个 JSON 对象,不要 markdown 围栏,不要解释。格式:\n" +
 		`{"workflow": "<选中的工作流 name>", "variables": {"<var>": "<value>"}, "confidence": 0.0-1.0}` +
-		"\n如果没有任何工作流匹配,workflow 设为空字符串,confidence 设为 0。"
+		"\n如果没有任何工作流匹配,workflow 设为空字符串,confidence 设为 0。\n\n" +
+		"## 判断创建 vs 执行\n" +
+		"仅当用户**明确使用创建类动词**(创建/生成/新建/写一个/做一个)且描述的是一个**尚不存在的**工作流时,workflow 设为空。\n" +
+		"其他所有情况(运行/执行/部署/跑/或直接描述目标),都从列表中选最匹配的工作流。即使匹配不完全精确,只要语义相关就选,并在 confidence 里反映确信度。"
 
 	req := Request{
 		System: system,
 		Prompt: fmt.Sprintf(
-			"用户意图: %s\n\n%s\n请选出最匹配的工作流,并根据意图填好它声明的变量。只输出 JSON。",
+			"用户意图: %s\n\n%s\n选出最匹配的工作流,并根据意图填好它声明的变量。仅当用户明确要创建新工作流时才返回空 workflow。只输出 JSON。",
 			intent, sb.String()),
 	}
 	resp, err := a.provider.Complete(ctx, req)
