@@ -199,7 +199,7 @@ export default function ChatPanel() {
               {m.thinking && !m.content && (!m.toolSteps || m.toolSteps.length === 0) && (
                 <span className="text-sm text-muted-foreground animate-pulse">思考中…</span>
               )}
-              {m.selection && m.selection.workflow && !(m as any).executionId && (
+              {m.selection && m.selection.workflow && (
                 <SelectionCard
                   selection={m.selection}
                   onRun={() => runSelection(i, m.selection!)}
