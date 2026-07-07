@@ -47,6 +47,10 @@ func (p *AnthropicProvider) baseURL() string {
 	return "https://api.deepseek.com/anthropic"
 }
 
+// GetModel returns the provider's default model id. Used by the agent loop
+// to know which model to pass to CompleteRaw.
+func (p *AnthropicProvider) GetModel() string { return p.DefaultModel }
+
 func (p *AnthropicProvider) httpClient() *http.Client {
 	if p.HTTPClient != nil {
 		return p.HTTPClient

@@ -119,6 +119,17 @@ type Provider interface {
 	Stream(ctx context.Context, req Request, onToken func(string)) (Response, error)
 }
 
+// ToolCapableProvider is implemented by providers that support multi-turn
+// tool use. The agent loop (RunAgent) type-asserts to this interface; if the
+// provider doesn't implement it, RunAgent falls back to plain Complete (no
+// tools).
+type ToolCapableProvider interface {
+	// CompleteRaw sends pre-built messages (including tool_use assistant turns
+	// and tool_result user turns) and returns the response. Used for multi-turn
+	// tool use loops.
+	CompleteRaw(ctx context.Context, model, system string, maxTokens int, temperature float64, tools []ToolDef, messages []AnthropicRawMessage) (Response, error)
+}
+
 // Name returns a human-readable identifier for the provider, for logging.
 type Namer interface {
 	Name() string

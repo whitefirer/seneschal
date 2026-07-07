@@ -91,6 +91,103 @@ func NewAssistant(p Provider) *Assistant {
 	return &Assistant{provider: p}
 }
 
+// Provider returns the underlying provider (for type assertions).
+func (a *Assistant) Provider() Provider { return a.provider }
+
+// RunAgent executes a multi-turn tool-use loop: sends the user message with
+// available tools, and when the model requests a tool, executes it via the
+// ToolExecutor, sends the result back, and repeats until the model returns a
+// final text response (end_turn). Each step is reported via onEvent.
+//
+// maxRounds caps the number of tool-use rounds to prevent infinite loops
+// (default 10 if zero).
+func (a *Assistant) RunAgent(ctx context.Context, system, userMessage string, tools []ToolDef, executor ToolExecutor, maxRounds int, onEvent func(AgentEvent)) error {
+	if a.provider == nil {
+		return fmt.Errorf("assistant: no AI provider configured")
+	}
+
+	// Try tool-capable path; fall back to plain Complete if provider doesn't
+	// support CompleteRaw (e.g. a mock).
+	tcp, toolCapable := a.provider.(ToolCapableProvider)
+
+	if !toolCapable || executor == nil || len(tools) == 0 {
+		// No tools: plain completion.
+		onEvent(AgentEvent{Type: "thinking"})
+		resp, err := a.provider.Complete(ctx, Request{
+			System: system, Prompt: userMessage,
+		})
+		if err != nil {
+			return err
+		}
+		onEvent(AgentEvent{Type: "text", Output: resp.Text})
+		onEvent(AgentEvent{Type: "done"})
+		return nil
+	}
+
+	if maxRounds <= 0 {
+		maxRounds = 10
+	}
+
+	// Build initial messages: [user: userMessage]
+	model := ""
+	if ap, ok := a.provider.(interface{ GetModel() string }); ok {
+		model = ap.GetModel()
+	}
+	messages := []AnthropicRawMessage{
+		{Role: "user", Content: []AnthropicRawContent{{Type: "text", Text: userMessage}}},
+	}
+
+	onEvent(AgentEvent{Type: "thinking"})
+
+	for round := 0; round < maxRounds; round++ {
+		resp, err := tcp.CompleteRaw(ctx, model, system, 4096, 0, tools, messages)
+		if err != nil {
+			onEvent(AgentEvent{Type: "error", Error: err.Error()})
+			return err
+		}
+
+		if !resp.HasToolCalls() {
+			// Final response — model is done.
+			if resp.Text != "" {
+				onEvent(AgentEvent{Type: "text", Output: resp.Text})
+			}
+			onEvent(AgentEvent{Type: "done"})
+			return nil
+		}
+
+		// Model wants tools: echo the assistant's tool_use turn back.
+		messages = append(messages, RawMessageFromResponse(resp))
+
+		// Execute each tool call and collect results.
+		var results []ToolResult
+		for _, tc := range resp.ToolCalls {
+			onEvent(AgentEvent{Type: "tool_call", Tool: tc.Name, Input: string(tc.Input)})
+
+			output, execErr := executor.ExecuteTool(tc.Name, tc.Input)
+			if execErr != nil {
+				output = execErr.Error()
+				results = append(results, ToolResult{ToolUseID: tc.ID, Output: output, IsError: true})
+			} else {
+				results = append(results, ToolResult{ToolUseID: tc.ID, Output: output})
+			}
+			onEvent(AgentEvent{Type: "tool_result", Tool: tc.Name, Output: truncateForEvent(output)})
+		}
+
+		// Send tool results back as a user turn.
+		messages = append(messages, RawMessageWithToolResults(results))
+	}
+
+	onEvent(AgentEvent{Type: "error", Error: fmt.Sprintf("agent loop exceeded %d rounds", maxRounds)})
+	return fmt.Errorf("agent loop exceeded %d rounds", maxRounds)
+}
+
+func truncateForEvent(s string) string {
+	if len(s) > 2000 {
+		return s[:2000] + "...(截断)"
+	}
+	return s
+}
+
 // CandidateEntry is the assistant's view of a selectable workflow. It mirrors
 // the fields the model needs to choose and fill variables. Callers convert
 // from their own registry type (e.g. workflow.WorkflowEntry) since the ai
@@ -254,7 +351,33 @@ func (a *Assistant) Fix(ctx context.Context, yamlContent, validationError string
 	return fixed, nil
 }
 
-// ExecutionStepResult is the assistant's view of a completed step. It mirrors
+// Modify takes an existing workflow YAML and a natural-language instruction,
+// returns the modified YAML. Like Fix but for arbitrary edits rather than
+// validation errors.
+func (a *Assistant) Modify(ctx context.Context, yamlContent, instruction string) (string, error) {
+	if a.provider == nil {
+		return "", fmt.Errorf("assistant: no AI provider configured")
+	}
+	system := actionSchemaDoc + "\n\n## 示例工作流\n" + exampleWorkflow +
+		"\n\n## 重要输出规则\n你只能输出修改后的完整 YAML,不要 markdown 围栏,不要解释,不要任何其他文字。"
+	req := Request{
+		System: system,
+		Prompt: fmt.Sprintf(
+			"请根据指令修改下面这个 goworkflow 工作流,输出修改后的完整 YAML。\n\n"+
+				"修改指令:\n%s\n\n"+
+				"原 YAML:\n```yaml\n%s\n```",
+			instruction, yamlContent),
+	}
+	resp, err := a.provider.Complete(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("modify: %w", err)
+	}
+	modified := extractYAML(resp.Text)
+	if strings.TrimSpace(modified) == "" {
+		return yamlContent, fmt.Errorf("modify: model returned empty YAML")
+	}
+	return modified, nil
+}
 // the fields the model needs to reason about an execution (status, output,
 // error, determinism). Callers convert from workflow.StepResult since ai
 // cannot import workflow.
