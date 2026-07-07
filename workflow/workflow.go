@@ -80,6 +80,9 @@ type Step struct {
 	Inputs   []string `yaml:"inputs,omitempty"`   // explicit vars to expose to the model
 	Question string   `yaml:"question,omitempty"` // ai_decide: the question to answer true/false
 	Model    string   `yaml:"model,omitempty"`    // override the workflow-level model for this step
+	// SaveOutputFormat: when "json", the AI output is parsed as JSON and each
+	// key is expanded as a nested variable (e.g. save_output=plan → plan.region).
+	SaveOutputFormat string `yaml:"save_output_format,omitempty"`
 	// Memory explicitly declares which upstream steps' AI output to include as
 	// conversation history. Empty = automatic (all prior AI steps' turns).
 	Memory   []string `yaml:"memory,omitempty"`

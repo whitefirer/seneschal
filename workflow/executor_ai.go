@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -182,6 +183,10 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	// Persist the generated text into a variable for downstream steps.
 	if step.SaveOutput != "" {
 		e.context.Set(step.SaveOutput, resp.Text)
+		// If save_output_format is json, also expand each key as nested vars.
+		if step.SaveOutputFormat == "json" {
+			expandJSONOutput(e, step.SaveOutput, resp.Text)
+		}
 	}
 	e.context.SetResult(step.Name, resp.Text)
 
@@ -367,5 +372,31 @@ func atKeyword(s string, kws ...string) bool {
 
 func isAlphaNum(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
+// expandJSONOutput parses text as JSON and sets each top-level key as a
+// nested variable: prefix.key = value. E.g. prefix="plan", text={"region":"us"},
+// sets context "plan.region" = "us". If parse fails, silently skips (the raw
+// text is already stored via save_output).
+func expandJSONOutput(e *Executor, prefix, text string) {
+	// Strip markdown fences if present (AI sometimes wraps JSON in ```json).
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "```") {
+		if nl := strings.Index(text, "\n"); nl >= 0 {
+			text = text[nl+1:]
+		}
+		if i := strings.LastIndex(text, "```"); i >= 0 {
+			text = text[:i]
+		}
+		text = strings.TrimSpace(text)
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal([]byte(text), &data); err != nil {
+		return // not valid JSON — raw text already stored, that's fine
+	}
+	for k, v := range data {
+		e.context.Set(prefix+"."+k, fmt.Sprintf("%v", v))
+	}
 }
 
