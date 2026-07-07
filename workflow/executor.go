@@ -51,6 +51,7 @@ type Executor struct {
 	workflowDir    string              // directory of the current workflow file (for sub-workflow relative paths)
 	workflowName   string              // current workflow name (for hooks)
 	workflowHooks  []HookConfig        // workflow-level hooks (stored for step inheritance)
+	globalHooks    []HookConfig        // server-level hooks (applied to all workflows)
 	// AI integration (Phase 2). aiProvider is set via SetAIProvider or built
 	// from the workflow's ai: config in Execute(). The ai* fields hold
 	// workflow-level defaults; steps may override per-step in M3+.
@@ -85,8 +86,10 @@ type Executor struct {
 // If not called, Execute() builds one from the workflow's ai: config (if any).
 func (e *Executor) SetAIProvider(p ai.Provider) { e.aiProvider = p }
 
+// SetGlobalHooks sets server-level hooks applied to all workflows.
+func (e *Executor) SetGlobalHooks(hooks []HookConfig) { e.globalHooks = hooks }
+
 // SetReplayCache enables replay mode: deterministic steps present in the cache
-// are served from it instead of re-executing. Pass nil to disable replay.
 func (e *Executor) SetReplayCache(cache map[string]*StepResult) {
 	e.replayCache = cache
 	e.replayedHits = 0
@@ -1145,7 +1148,15 @@ func (e *Executor) fireStepHooks(step Step, result StepResult) {
 	}
 	// Workflow-level hooks (inherited).
 	for _, hook := range e.workflowHooks {
-		executeHook(hook, event, e)
+		if hook.On == HookAfterStep {
+			executeHook(hook, event, e)
+		}
+	}
+	// Server-level global hooks.
+	for _, hook := range e.globalHooks {
+		if hook.On == HookAfterStep {
+			executeHook(hook, event, e)
+		}
 	}
 }
 
@@ -1160,7 +1171,15 @@ func (e *Executor) fireWorkflowHooks(wf *Workflow, result *WorkflowResult) {
 		Variables:    result.Variables,
 	}
 	for _, hook := range wf.Hooks {
-		executeHook(hook, event, e)
+		if hook.On == HookWorkflowEnd {
+			executeHook(hook, event, e)
+		}
+	}
+	// Server-level global hooks.
+	for _, hook := range e.globalHooks {
+		if hook.On == HookWorkflowEnd {
+			executeHook(hook, event, e)
+		}
 	}
 }
 

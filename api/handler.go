@@ -31,7 +31,8 @@ type Handler struct {
 	upgrader     websocket.Upgrader
 	executions   map[string]*ExecutionDetail
 	execMu       sync.RWMutex
-	aiConfig     workflow.AIConfig // server-level AI config (model/provider/base_url)
+	aiConfig     workflow.AIConfig    // server-level AI config
+	globalHooks  []workflow.HookConfig // server-level hooks (applied to all workflows)
 }
 
 // maxInMemoryExecutions caps the in-memory execution cache. Older entries are
@@ -41,7 +42,7 @@ const maxInMemoryExecutions = 100
 // NewHandler creates a new API handler. store may be nil to disable
 // persistence (history lives only in memory, lost on restart). aiCfg carries
 // the server-level AI config (model/provider/base_url) for chat/explain/fix.
-func NewHandler(hub *WSHub, workflowsDir string, store workflow.ExecutionStore, aiCfg workflow.AIConfig, checkOrigin func(r *http.Request) bool) *Handler {
+func NewHandler(hub *WSHub, workflowsDir string, store workflow.ExecutionStore, aiCfg workflow.AIConfig, globalHooks []workflow.HookConfig, checkOrigin func(r *http.Request) bool) *Handler {
 	upgrader := defaultUpgrader
 	upgrader.CheckOrigin = checkOrigin
 	h := &Handler{
@@ -49,6 +50,7 @@ func NewHandler(hub *WSHub, workflowsDir string, store workflow.ExecutionStore, 
 		workflowsDir: workflowsDir,
 		store:        store,
 		aiConfig:     aiCfg,
+		globalHooks:  globalHooks,
 		upgrader:     upgrader,
 		executions:   make(map[string]*ExecutionDetail),
 	}
@@ -583,6 +585,9 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Create executor
 	executor := workflow.NewExecutor(vars)
 	executor.SetDryRun(req.DryRun)
+	if len(h.globalHooks) > 0 {
+		executor.SetGlobalHooks(h.globalHooks)
+	}
 
 	// Setup progress callback
 	executor.OnProgress = func(event workflow.ProgressEvent) {
@@ -1094,6 +1099,9 @@ func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
 	// so AI steps can re-run). The provider is best-effort: a workflow with
 	// no AI steps needs none.
 	executor := workflow.NewExecutor(snap.Variables)
+	if len(h.globalHooks) > 0 {
+		executor.SetGlobalHooks(h.globalHooks)
+	}
 	if !opts.Full {
 		cache := buildAPIReplayCache(snap.Steps, opts)
 		executor.SetReplayCache(cache)

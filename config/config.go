@@ -28,6 +28,22 @@ type ServerConfig struct {
 	// step.model overrides per-step. API key still comes from environment
 	// variables only (never written to YAML).
 	AI AIConfig    `yaml:"ai,omitempty"`
+	// Hooks are server-level lifecycle hooks applied to ALL workflows.
+	// Individual workflows and steps can add their own; all three levels merge.
+	Hooks []HookConfig `yaml:"hooks,omitempty"`
+}
+
+// HookConfig is a server-level hook declaration. Mirrors workflow.HookConfig
+// structurally; the server converts to workflow.HookConfig at runtime.
+type HookConfig struct {
+	On      string `yaml:"on"`
+	When    string `yaml:"when,omitempty"`
+	Type    string `yaml:"type"`
+	URL     string `yaml:"url,omitempty"`
+	Message string `yaml:"message,omitempty"`
+	Command string `yaml:"command,omitempty"`
+	Mode    string `yaml:"mode,omitempty"`
+	Prompt  string `yaml:"prompt,omitempty"`
 }
 
 // AIConfig is the server-level AI provider configuration. It mirrors

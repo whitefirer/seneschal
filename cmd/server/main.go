@@ -97,7 +97,21 @@ func main() {
 		MaxTokens:   cfg.AI.MaxTokens,
 		Temperature: cfg.AI.Temperature,
 	}
-	handler := api.NewHandler(hub, workflowsDir, store, aiCfg, cfg.CheckOrigin())
+	// Convert server-level hooks to workflow.HookConfig.
+	globalHooks := make([]workflow.HookConfig, len(cfg.Hooks))
+	for i, h := range cfg.Hooks {
+		globalHooks[i] = workflow.HookConfig{
+			On:      workflow.HookPhase(h.On),
+			When:    h.When,
+			Type:    h.Type,
+			URL:     h.URL,
+			Message: h.Message,
+			Command: h.Command,
+			Mode:    h.Mode,
+			Prompt:  h.Prompt,
+		}
+	}
+	handler := api.NewHandler(hub, workflowsDir, store, aiCfg, globalHooks, cfg.CheckOrigin())
 
 	// Setup routes using gorilla/mux
 	r := mux.NewRouter()

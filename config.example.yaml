@@ -48,3 +48,15 @@ allowed_origins:
 #   provider: ollama
 #   model: qwen3:32b                              # ollama pull 下载的模型 tag
 #   base_url: http://localhost:11434              # 可选,默认 localhost:11434;也可用 OLLAMA_HOST 环境变量
+#
+# 全局 Hook — 对所有 workflow 生效,workflow/step 级 hooks 追加生效:
+# hooks:
+#   - on: workflow_end                            # after_step | workflow_end
+#     when: failed                                # success | failed | always(默认)
+#     type: webhook
+#     url: https://hooks.example.com/alert
+#     message: "workflow {{.workflow_name}} {{.status}}"
+#   - on: after_step
+#     when: failed
+#     type: shell
+#     command: "echo '{{.step_name}} failed' >> /var/log/goworkflow-errors.log"
