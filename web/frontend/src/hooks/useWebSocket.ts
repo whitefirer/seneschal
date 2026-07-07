@@ -6,22 +6,20 @@ export interface ProgressEvent {
   workflowName: string
   workflowFile?: string
   stepId?: string
-  step_id?: string  // 后端 snake_case 字段
   stepName?: string
-  name?: string     // 后端 snake_case 字段
+  name?: string
   action?: string
   status?: string
   output?: string
   error?: string
   duration?: string
   timestamp: string
-  time?: string     // 后端 snake_case 字段
+  time?: string
   // 后端格式化的日志消息
   logMessage?: string
   logLevel?: string
   // Condition 特有字段
   conditionResult?: boolean
-  condition_result?: boolean  // 后端 snake_case 字段
 }
 
 interface UseWebSocketOptions {

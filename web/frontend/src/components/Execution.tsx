@@ -274,11 +274,11 @@ export default function Execution() {
       setWorkflowFile(event.workflowFile)
     }
 
-    // 获取实际的 stepId 和 name（支持 snake_case 和 camelCase）
-    const actualStepId = event.stepId || event.step_id || ''
+    // 获取实际的 stepId 和 name
+    const actualStepId = event.stepId || ''
     const actualName = event.stepName || event.name || ''
     const actualTimestamp = event.timestamp || event.time || ''
-    const actualConditionResult = event.conditionResult ?? event.condition_result
+    const actualConditionResult = event.conditionResult
 
     // 使用后端提供的日志消息
     if (event.logMessage) {

@@ -22,5 +22,15 @@ export default defineConfig({
   build: {
     outDir: '../static',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'monaco': ['@monaco-editor/react'],
+          'xyflow': ['@xyflow/react', 'dagre'],
+          'i18n': ['i18next', 'react-i18next'],
+        },
+      },
+    },
   },
 })
