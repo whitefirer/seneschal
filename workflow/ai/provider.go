@@ -11,13 +11,32 @@
 // configurable base URL.
 package ai
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Message is one turn in a conversation history. Role is "user" or
 // "assistant". Providers translate this into their native multi-turn format.
 type Message struct {
 	Role    string
 	Content string
+}
+
+// ToolDef declares a tool the model can call. InputSchema is a JSON Schema
+// object (kept as RawMessage to avoid modeling all of JSON Schema in Go).
+type ToolDef struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+}
+
+// ToolCall is the model's request to execute a tool. ID must be echoed back
+// in the matching tool_result. Input is the parsed JSON arguments object.
+type ToolCall struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
 // Request is a single completion request to a provider.
@@ -42,7 +61,7 @@ type Request struct {
 	// limit cost and leakage.
 	Inputs map[string]string
 
-	// Model is the provider-specific model id, e.g. "deepseek-chat" or
+	// Model is the provider-specific model id, e.g. "deepseek-v4-flash" or
 	// "claude-sonnet-4-5-20250929". Falls back to the provider default if empty.
 	Model string
 
@@ -52,15 +71,26 @@ type Request struct {
 	// Temperature controls randomness. Defaults to 0 (deterministic-ish)
 	// when zero; set explicitly for creative tasks.
 	Temperature float64
+
+	// Tools declares the tools available to the model. When non-empty, the
+	// model may respond with ToolCalls (see Response) instead of text. The
+	// caller must execute the tools and send results back via a follow-up
+	// request (multi-turn tool use loop). Empty = no tools (backward compatible).
+	Tools []ToolDef
 }
 
 // Response is the result of a completion request.
 type Response struct {
-	// Text is the full generated text.
+	// Text is the full generated text (concatenation of all text blocks).
 	Text string
 
-	// StopReason is the provider's reason for stopping, e.g. "end_turn",
-	// "max_tokens", "stop_sequence". Useful for debugging truncation.
+	// ToolCalls are tool invocations the model wants the caller to execute.
+	// Non-empty when StopReason == "tool_use". The caller executes each tool,
+	// then sends a follow-up request with tool_result messages.
+	ToolCalls []ToolCall
+
+	// StopReason is the provider's reason for stopping: "end_turn" (normal),
+	// "tool_use" (wants tools called), "max_tokens", "stop_sequence".
 	StopReason string
 
 	// InputTokens / OutputTokens are billed token counts when the provider
@@ -68,6 +98,10 @@ type Response struct {
 	InputTokens  int
 	OutputTokens int
 }
+
+// HasToolCalls reports whether the response contains tool invocations that
+// need to be executed before the conversation can continue.
+func (r Response) HasToolCalls() bool { return len(r.ToolCalls) > 0 }
 
 // Provider is the abstraction over LLM backends.
 //

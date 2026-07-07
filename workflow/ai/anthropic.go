@@ -62,6 +62,13 @@ type anthropicRequest struct {
 	System      string             `json:"system,omitempty"`
 	Messages    []anthropicMessage `json:"messages"`
 	Stream      bool               `json:"stream,omitempty"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
+}
+
+type anthropicTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -69,9 +76,20 @@ type anthropicMessage struct {
 	Content []anthropicContent `json:"content"`
 }
 
+// anthropicContent is polymorphic: a text block, a tool_use block (model wants
+// to call a tool), or a tool_result block (caller sends the result back).
 type anthropicContent struct {
-	Type string `json:"type"` // "text"
-	Text string `json:"text"`
+	Type string `json:"type"`
+	// text block
+	Text string `json:"text,omitempty"`
+	// tool_use block (in assistant responses)
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
+	// tool_result block (in user messages, answering a tool_use)
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// IsError marks a failed tool result.
+	IsError bool `json:"is_error,omitempty"`
 }
 
 // buildAnthropicMessages converts the Request into Anthropic-format messages:
@@ -134,6 +152,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req Request) (Response
 		Temperature: req.Temperature,
 		System:      req.System,
 		Messages:    buildAnthropicMessages(req),
+		Tools:       toAnthropicTools(req.Tools),
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -172,21 +191,170 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req Request) (Response
 		return Response{}, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Concatenate all text blocks (the common case is a single block, but the
-	// spec allows multiple).
+	// Parse response: concatenate text blocks + collect tool_use blocks.
 	var sb strings.Builder
+	var toolCalls []ToolCall
 	for _, c := range ar.Content {
-		if c.Type == "text" {
+		switch c.Type {
+		case "text":
 			sb.WriteString(c.Text)
+		case "tool_use":
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    c.ID,
+				Name:  c.Name,
+				Input: c.Input,
+			})
 		}
 	}
 
 	return Response{
 		Text:         sb.String(),
+		ToolCalls:    toolCalls,
 		StopReason:   ar.StopReason,
 		InputTokens:  ar.Usage.InputTokens,
 		OutputTokens: ar.Usage.OutputTokens,
 	}, nil
+}
+
+// toAnthropicTools converts ai.ToolDef to the wire format.
+func toAnthropicTools(tools []ToolDef) []anthropicTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]anthropicTool, len(tools))
+	for i, t := range tools {
+		out[i] = anthropicTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		}
+	}
+	return out
+}
+
+// AnthropicRawMessage is exported so callers (the agent loop) can construct
+// messages with tool_result content blocks, which the plain Message type
+// (role + string content) can't express.
+type AnthropicRawMessage = anthropicMessage
+
+// AnthropicRawContent is exported for the same reason.
+type AnthropicRawContent = anthropicContent
+
+// CompleteRaw is a lower-level Complete that accepts pre-built messages
+// (including tool_use assistant turns and tool_result user turns). Used by the
+// multi-turn agent loop: after executing tools, the caller appends the
+// assistant's tool_use turn + a user turn with tool_result blocks, then calls
+// CompleteRaw to continue.
+func (p *AnthropicProvider) CompleteRaw(ctx context.Context, model, system string, maxTokens int, temperature float64, tools []ToolDef, messages []AnthropicRawMessage) (Response, error) {
+	if p.APIKey == "" {
+		return Response{}, fmt.Errorf("anthropic provider: API key is empty")
+	}
+	if model == "" {
+		model = p.DefaultModel
+	}
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+
+	body := anthropicRequest{
+		Model:       model,
+		MaxTokens:   maxTokens,
+		Temperature: temperature,
+		System:      system,
+		Messages:    messages,
+		Tools:       toAnthropicTools(tools),
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL()+"/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return Response{}, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("x-api-key", p.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	resp, err := p.httpClient().Do(httpReq)
+	if err != nil {
+		return Response{}, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Response{}, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Response{}, fmt.Errorf("anthropic api error (status %d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var ar anthropicResponse
+	if err := json.Unmarshal(raw, &ar); err != nil {
+		return Response{}, fmt.Errorf("decode response: %w", err)
+	}
+
+	var sb strings.Builder
+	var toolCalls []ToolCall
+	for _, c := range ar.Content {
+		switch c.Type {
+		case "text":
+			sb.WriteString(c.Text)
+		case "tool_use":
+			toolCalls = append(toolCalls, ToolCall{ID: c.ID, Name: c.Name, Input: c.Input})
+		}
+	}
+	return Response{
+		Text:         sb.String(),
+		ToolCalls:    toolCalls,
+		StopReason:   ar.StopReason,
+		InputTokens:  ar.Usage.InputTokens,
+		OutputTokens: ar.Usage.OutputTokens,
+	}, nil
+}
+
+// RawMessageFromResponse builds an assistant-turn anthropicMessage from a
+// Response that contains tool_use blocks. Used by the agent loop to echo the
+// assistant's tool_use turn back in the next request.
+func RawMessageFromResponse(resp Response) AnthropicRawMessage {
+	msg := AnthropicRawMessage{Role: "assistant"}
+	if resp.Text != "" {
+		msg.Content = append(msg.Content, AnthropicRawContent{Type: "text", Text: resp.Text})
+	}
+	for _, tc := range resp.ToolCalls {
+		msg.Content = append(msg.Content, AnthropicRawContent{
+			Type:  "tool_use",
+			ID:    tc.ID,
+			Name:  tc.Name,
+			Input: tc.Input,
+		})
+	}
+	return msg
+}
+
+// RawMessageWithToolResults builds a user-turn message containing tool_result
+// blocks for each executed tool call.
+func RawMessageWithToolResults(results []ToolResult) AnthropicRawMessage {
+	msg := AnthropicRawMessage{Role: "user"}
+	for _, r := range results {
+		msg.Content = append(msg.Content, AnthropicRawContent{
+			Type:      "tool_result",
+			ToolUseID: r.ToolUseID,
+			Text:      r.Output,
+			IsError:   r.IsError,
+		})
+	}
+	return msg
+}
+
+// ToolResult is the result of executing a tool call, to be sent back to the model.
+type ToolResult struct {
+	ToolUseID string
+	Output    string
+	IsError   bool
 }
 
 // Stream performs a streaming completion via Anthropic SSE.
