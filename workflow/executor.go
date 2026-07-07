@@ -906,6 +906,9 @@ attemptLoop:
 				output = fmt.Sprintf("decided: %v", decided)
 			}
 			result.Nondeterministic = true
+		case "script":
+			output, err = e.execScript(step)
+			result.SideEffecting = true
 		default:
 			err = fmt.Errorf("unknown action: %s", step.Action)
 		}

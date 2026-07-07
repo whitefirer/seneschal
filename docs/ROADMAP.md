@@ -22,7 +22,7 @@
 | 9 | IM 渠道(飞书等) | 📋 计划 | 2, 3, 5 |
 | 10 | 容错(on_error: ai) | 📋 计划 | 2, 6 |
 | 11 | 更多 provider(OpenAI 兼容 / Ollama) | 📋 计划 | 2 |
-| 12 | 执行沙箱(sandbox/docker/microVM) | 📋 计划 | 5.5, 8 |
+| 12 | 执行沙箱(sandbox/WASM/docker) | 📋 计划 | 5.5, 8 |
 | 13 | Playbook(可分享可执行文档) | 📋 计划 | 9 |
 | 14 | 项目文档站点(VitePress + asciinema) | 📋 计划 | — |
 | 15 | Hook 与通知(hook/通知渠道) | 📋 计划 | 5.5, 9 |
@@ -302,19 +302,29 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
 
 ---
 
-## Phase 12 — 执行沙箱(sandbox/docker/microVM) 📋 计划
+## Phase 12 — 执行沙箱(sandbox/WASM/docker) 📋 计划
 
 **目标**:隔离执行环境,让 shell/script action 不污染宿主。和多用户/安全强相关。
 
-### 交付
-- [ ] 容器化执行(docker/podman 后端,每个执行一个临时容器)
-- [ ] 或轻量隔离(seccomp/chroot/namespace,不依赖 docker)
+### 轻量方案:WASM(推荐优先)
+- [ ] 嵌入 wazero(纯 Go WASM runtime,零外部依赖,编进 goworkflow 二进制)
+- [ ] script action 支持 `lang: wasm` + `module: xxx.wasm`
+- [ ] host functions:授予 stdin/stdout + 变量注入 + 受限文件系统访问
+- [ ] 天然沙箱:WASM 无 host 授予就无法访问文件系统/网络
+- [ ] 确定性重放:纯 WASM(无非确定性 host function)可标记为 deterministic
+- [ ] 适用语言:Rust/Go/C/Zig/AssemblyScript → 编译到 .wasm
+
+### 重量方案:Docker
+- [ ] 容器化执行(docker/podman,每个执行一个临时容器)
 - [ ] 资源限制(CPU/内存/时间/磁盘)
 - [ ] 网络策略(允许/禁止出站)
 - [ ] 文件系统隔离(只允许工作目录读写)
+- [ ] 适用场景:需要完整 OS 能力、系统级包(pip install / npm install)
 
-### 和 Phase 8(script action)的关系
-script action 让用户内嵌代码;sandbox 让这些代码在隔离环境跑。两者配合:开发时不隔离(本机跑),多用户/不可信场景必须隔离。
+### 选型
+- 轻量场景/不可信代码/需确定性重放 → WASM(零部署,天然沙箱)
+- 重量场景/需要系统级能力 → Docker(完整隔离)
+- 用户按需选择,不强制
 
 ### 为什么放后期
 sandbox 是基础设施级工程,和 AI 主线正交。在单机/可信内网场景下非必需;多用户/公网暴露时是 P0。

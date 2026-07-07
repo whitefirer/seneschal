@@ -58,6 +58,12 @@ type Step struct {
 	Source string `yaml:"source,omitempty"` // template file path
 	Output string `yaml:"output,omitempty"` // output file path
 
+	// Script action (action: "script")
+	// Lang selects the runtime (e.g. "python", "node"). Mapped to a command
+	// (python→python3, node→node) by the executor. Code is the inline script.
+	Lang string `yaml:"lang,omitempty"`
+	Code string `yaml:"code,omitempty"`
+
 	// Foreach action
 	Items    interface{} `yaml:"items,omitempty"` // string (variable name) or list
 	ItemVar  string      `yaml:"item_var,omitempty"` // loop variable name, default: "item"

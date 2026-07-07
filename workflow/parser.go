@@ -146,6 +146,13 @@ func ValidateStep(step Step, index int) []error {
 		if step.Prompt == "" {
 			errs = append(errs, fmt.Errorf("step[%d] (%s): ai action requires 'prompt'", index, step.Name))
 		}
+	case "script":
+		if step.Lang == "" {
+			errs = append(errs, fmt.Errorf("step[%d] (%s): script action requires 'lang' (e.g. python, node)", index, step.Name))
+		}
+		if step.Code == "" {
+			errs = append(errs, fmt.Errorf("step[%d] (%s): script action requires 'code'", index, step.Name))
+		}
 	case "ai_decide":
 		if step.Question == "" {
 			errs = append(errs, fmt.Errorf("step[%d] (%s): ai_decide action requires 'question'", index, step.Name))
