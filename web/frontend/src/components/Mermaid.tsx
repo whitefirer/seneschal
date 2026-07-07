@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import mermaid from 'mermaid'
 
-// Mermaid is configured once on first import, then render is called per-chart.
 let initialized = false
 
 function initMermaid() {
@@ -9,16 +8,16 @@ function initMermaid() {
   mermaid.initialize({
     startOnLoad: false,
     theme: 'default',
-    securityLevel: 'loose', // allow <br/> in node labels
-    flowchart: { htmlLabels: true, curve: 'basis' },
+    securityLevel: 'loose',
+    flowchart: { htmlLabels: true, curve: 'basis', useMaxWidth: false },
   })
   initialized = true
 }
 
 /**
- * Mermaid renders a mermaid chart definition string into an SVG. Lazy-loaded
- * by ChatPanel so the ~500KB mermaid library only loads when the user clicks
- * "查看结构图".
+ * Mermaid renders a chart definition into an SVG. The SVG is sized to fill
+ * the container width (useMaxWidth: false + explicit CSS) so it doesn't
+ * render tiny inside a large modal.
  */
 export default function Mermaid({ chart }: { chart: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -30,8 +29,19 @@ export default function Mermaid({ chart }: { chart: string }) {
     let cancelled = false
 
     mermaid.render(id, chart).then(({ svg }) => {
-      if (!cancelled && containerRef.current) {
-        containerRef.current.innerHTML = svg
+      if (cancelled || !containerRef.current) return
+      containerRef.current.innerHTML = svg
+      // Force the SVG to be at least as wide as the container and scale up.
+      const svgEl = containerRef.current.querySelector('svg')
+      if (svgEl) {
+        svgEl.style.maxWidth = 'none'
+        svgEl.style.width = '100%'
+        svgEl.style.height = 'auto'
+        // If the natural SVG is wider than container, let it overflow scroll.
+        const naturalWidth = svgEl.viewBox?.baseVal?.width || svgEl.clientWidth
+        if (naturalWidth > containerRef.current.clientWidth) {
+          svgEl.style.width = naturalWidth + 'px'
+        }
       }
     }).catch((err) => {
       if (!cancelled) setError(String(err))
@@ -43,5 +53,5 @@ export default function Mermaid({ chart }: { chart: string }) {
   if (error) {
     return <div className="text-xs text-red-500 p-2">图表渲染失败: {error}</div>
   }
-  return <div ref={containerRef} className="mermaid-container flex justify-center" />
+  return <div ref={containerRef} className="mermaid-container" style={{ minWidth: '100%', overflow: 'auto' }} />
 }
