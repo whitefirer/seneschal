@@ -89,7 +89,15 @@ func main() {
 	// Create API handler with a file-backed execution store so history
 	// survives restarts.
 	store := workflow.NewFileStore(executionsDir)
-	handler := api.NewHandler(hub, workflowsDir, store, cfg.CheckOrigin())
+	// Convert server-level AI config to workflow.AIConfig for the handler.
+	aiCfg := workflow.AIConfig{
+		Provider:    cfg.AI.Provider,
+		Model:       cfg.AI.Model,
+		BaseURL:     cfg.AI.BaseURL,
+		MaxTokens:   cfg.AI.MaxTokens,
+		Temperature: cfg.AI.Temperature,
+	}
+	handler := api.NewHandler(hub, workflowsDir, store, aiCfg, cfg.CheckOrigin())
 
 	// Setup routes using gorilla/mux
 	r := mux.NewRouter()

@@ -44,7 +44,7 @@ func (h *Handler) AskExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	provider, err := ai.BuildProvider(ai.Config{})
+	provider, err := ai.BuildProvider(h.aiConfig)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResp("AI unavailable: "+err.Error()))
 		return

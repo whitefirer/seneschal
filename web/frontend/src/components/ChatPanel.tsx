@@ -12,11 +12,20 @@ interface ExecState {
   steps?: any[]
 }
 
+interface ToolStep {
+  tool: string
+  input?: string
+  output?: string
+  selection?: ChatSelection
+  yaml?: string
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
   thinking?: boolean
   selection?: ChatSelection
+  toolSteps?: ToolStep[]   // agent tool use process
 }
 
 const STORAGE_KEY = 'goworkflow-chat-messages'
@@ -66,36 +75,53 @@ export default function ChatPanel() {
 
     try {
       await chatApi.sendMessage(msg, (event) => {
-        if (event.type === 'thinking') {
+        const etype = event.type
+        if (etype === 'thinking') {
           setMessages((prev) => {
             const next = [...prev]
-            next[next.length - 1] = { role: 'assistant', content: '正在思考…', thinking: true }
+            next[next.length - 1] = { role: 'assistant', content: '', thinking: true, toolSteps: [] }
             return next
           })
-        } else if (event.type === 'selection') {
-          const sel = event as unknown as ChatSelection
+        } else if (etype === 'tool_call') {
+          // AI is calling a tool — add a step to the current message.
           setMessages((prev) => {
             const next = [...prev]
-            if (sel.workflow) {
-              next[next.length - 1] = {
-                role: 'assistant',
-                content: `我找到了工作流 **${sel.workflow}**，置信度 ${(sel.confidence * 100).toFixed(0)}%。`,
-                selection: sel,
+            const last = next[next.length - 1]
+            if (!last.toolSteps) last.toolSteps = []
+            last.toolSteps.push({ tool: event.tool, input: event.input })
+            last.thinking = false
+            next[next.length - 1] = { ...last }
+            return next
+          })
+        } else if (etype === 'tool_result') {
+          // Tool finished — update the last step with output.
+          setMessages((prev) => {
+            const next = [...prev]
+            const last = next[next.length - 1]
+            if (last.toolSteps && last.toolSteps.length > 0) {
+              const step = last.toolSteps[last.toolSteps.length - 1]
+              step.output = event.output
+              // Rich data: selection (for select_workflow) or yaml (for generate)
+              if (event.selection) {
+                step.selection = event.selection as unknown as ChatSelection
+                last.selection = step.selection // also set on message for SelectionCard
               }
-            } else {
-              next[next.length - 1] = {
-                role: 'assistant',
-                content: sel.suggestCreate
-                  ? '没有找到匹配的工作流。你可以用 `goworkflow generate` 命令创建一个新的，或者换个描述再试试。'
-                  : '没有找到匹配的工作流。请尝试更具体的描述。',
-              }
+              if (event.yaml) step.yaml = event.yaml
             }
+            next[next.length - 1] = { ...last }
             return next
           })
-        } else if (event.type === 'error') {
+        } else if (etype === 'text') {
+          // Final text response from AI.
           setMessages((prev) => {
             const next = [...prev]
-            next[next.length - 1] = { role: 'assistant', content: `出错了：${event.error}` }
+            next[next.length - 1] = { ...next[next.length - 1], content: event.content || '', thinking: false }
+            return next
+          })
+        } else if (etype === 'error') {
+          setMessages((prev) => {
+            const next = [...prev]
+            next[next.length - 1] = { role: 'assistant', content: `出错了：${event.error}`, thinking: false }
             return next
           })
         }
@@ -150,8 +176,16 @@ export default function ChatPanel() {
               </div>
             )}
             <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 ${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'}`}>
+              {/* Tool use steps (agent process) */}
+              {m.toolSteps && m.toolSteps.length > 0 && (
+                <div className="mb-2 space-y-1">
+                  {m.toolSteps.map((ts, j) => (
+                    <ToolStepView key={j} step={ts} />
+                  ))}
+                </div>
+              )}
               {m.content && <MarkdownView content={m.content} />}
-              {m.thinking && !m.content && (
+              {m.thinking && !m.content && (!m.toolSteps || m.toolSteps.length === 0) && (
                 <span className="text-sm text-muted-foreground animate-pulse">思考中…</span>
               )}
               {m.selection && m.selection.workflow && (
@@ -191,6 +225,44 @@ export default function ChatPanel() {
         </div>
         <p className="text-xs text-muted-foreground mt-1.5">Enter 发送，Shift+Enter 换行</p>
       </div>
+    </div>
+  )
+}
+
+// ── Tool step view (shows agent's tool call + result inline) ─────────────────
+
+const TOOL_LABELS: Record<string, string> = {
+  list_workflows: '📋 列出工作流',
+  select_workflow: '🔍 选择工作流',
+  generate_workflow: '✨ 生成工作流',
+  modify_workflow: '✏️ 修改工作流',
+  explain_workflow: '📖 解释工作流',
+  validate_workflow: '✅ 校验工作流',
+  run_workflow: '🚀 执行工作流',
+}
+
+function ToolStepView({ step }: { step: ToolStep }) {
+  const [expanded, setExpanded] = useState(false)
+  const hasOutput = step.output && step.output !== 'generate: model returned empty YAML'
+  const label = TOOL_LABELS[step.tool] || step.tool
+
+  return (
+    <div className="text-xs border border-border/50 rounded px-2 py-1 bg-background/50">
+      <div className="flex items-center gap-1.5">
+        {hasOutput ? <CheckCircle className="w-3 h-3 text-green-500 flex-shrink-0" />
+         : <Loader2 className="w-3 h-3 animate-spin text-primary flex-shrink-0" />}
+        <span className="font-medium">{label}</span>
+        {hasOutput && (
+          <button onClick={() => setExpanded(!expanded)} className="text-muted-foreground hover:text-foreground ml-auto text-[10px]">
+            {expanded ? '收起' : '详情'}
+          </button>
+        )}
+      </div>
+      {expanded && hasOutput && (
+        <pre className="mt-1 p-1.5 rounded bg-muted text-foreground whitespace-pre-wrap break-all max-h-32 overflow-y-auto text-[10px]">
+          {step.yaml && step.tool === 'generate_workflow' ? step.yaml : step.output}
+        </pre>
+      )}
     </div>
   )
 }

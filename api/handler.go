@@ -31,6 +31,7 @@ type Handler struct {
 	upgrader     websocket.Upgrader
 	executions   map[string]*ExecutionDetail
 	execMu       sync.RWMutex
+	aiConfig     workflow.AIConfig // server-level AI config (model/provider/base_url)
 }
 
 // maxInMemoryExecutions caps the in-memory execution cache. Older entries are
@@ -38,14 +39,16 @@ type Handler struct {
 const maxInMemoryExecutions = 100
 
 // NewHandler creates a new API handler. store may be nil to disable
-// persistence (history lives only in memory, lost on restart).
-func NewHandler(hub *WSHub, workflowsDir string, store workflow.ExecutionStore, checkOrigin func(r *http.Request) bool) *Handler {
+// persistence (history lives only in memory, lost on restart). aiCfg carries
+// the server-level AI config (model/provider/base_url) for chat/explain/fix.
+func NewHandler(hub *WSHub, workflowsDir string, store workflow.ExecutionStore, aiCfg workflow.AIConfig, checkOrigin func(r *http.Request) bool) *Handler {
 	upgrader := defaultUpgrader
 	upgrader.CheckOrigin = checkOrigin
 	h := &Handler{
 		hub:          hub,
 		workflowsDir: workflowsDir,
 		store:        store,
+		aiConfig:     aiCfg,
 		upgrader:     upgrader,
 		executions:   make(map[string]*ExecutionDetail),
 	}
@@ -1095,7 +1098,7 @@ func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
 		cache := buildAPIReplayCache(snap.Steps, opts)
 		executor.SetReplayCache(cache)
 	}
-	if p, perr := ai.BuildProvider(ai.Config{}); perr == nil {
+	if p, perr := ai.BuildProvider(h.aiConfig); perr == nil {
 		executor.SetAIProvider(p)
 	}
 

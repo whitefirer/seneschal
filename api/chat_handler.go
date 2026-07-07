@@ -11,15 +11,10 @@ import (
 	"goworkflow/workflow/ai"
 )
 
-// ChatHandler handles POST /api/chat — a natural-language workflow trigger
-// that streams server-sent events back to the browser.
-//
-// Unlike RunWorkflow (which delegates to the executor and pushes progress
-// over WebSocket), chat is a request-scoped SSE stream: the client POSTs an
-// intent and reads a stream of events (thinking -> selection -> done) until
-// the assistant has chosen a workflow and filled variables. Confirming and
-// running the selected workflow is a separate step (the frontend calls the
-// existing /run endpoint after the user confirms).
+// ChatHandler handles POST /api/chat — an AI agent that streams
+// server-sent events. The agent autonomously picks tools (list/select/
+// generate/modify/explain/validate/run) based on the user's intent via
+// multi-turn tool use.
 func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, errorResp("Method not allowed"))
@@ -38,28 +33,207 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the assistant from the environment. If no key is configured, the
-	// assistant cannot call a model — fail early with a clear message.
-	provider, err := ai.BuildProvider(ai.Config{})
+	provider, err := ai.BuildProvider(h.aiConfig)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, errorResp("AI unavailable: "+err.Error()))
 		return
 	}
 	assistant := ai.NewAssistant(provider)
 
-	// Resolve the workflow directory. Fall back to the handler's workflows dir.
 	dir := req.Dir
 	if dir == "" {
 		dir = h.workflowsDir
 	}
-	registry := workflow.NewDirRegistry(dir)
-	entries, err := registry.List()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResp("list workflows: "+err.Error()))
+
+	// SSE setup.
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, errorResp("streaming not supported"))
 		return
 	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
 
-	// Convert to assistant candidates, exposing declared variable names.
+	sendEvent := func(eventType string, data interface{}) {
+		payload, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
+		flusher.Flush()
+	}
+
+	// Build the tool executor with the registry + assistant.
+	exec := &chatToolExecutor{
+		assistant: assistant,
+		registry:  workflow.NewDirRegistry(dir),
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+	defer cancel()
+
+	system := "你是 goworkflow AI 助手。根据用户意图选择合适的工具。用中文回复。可用的工具: list_workflows(列出工作流), select_workflow(选已有工作流执行), generate_workflow(创建新工作流), modify_workflow(修改工作流), explain_workflow(解释工作流), validate_workflow(校验工作流), run_workflow(执行工作流)。"
+
+	err = assistant.RunAgent(ctx, system, req.Message, ai.AgentTools(), exec, 8, func(ev ai.AgentEvent) {
+		// Forward agent events as SSE. For tool_result, try to enrich
+		// selection/generate results so the frontend can render cards.
+		switch ev.Type {
+		case "thinking":
+			sendEvent("thinking", map[string]interface{}{"message": req.Message})
+		case "tool_call":
+			sendEvent("tool_call", map[string]string{"tool": ev.Tool, "input": ev.Input})
+		case "tool_result":
+			// Enrich: if select_workflow returned JSON, parse and add step preview.
+			data := map[string]interface{}{"tool": ev.Tool, "output": ev.Output}
+			if ev.Tool == "select_workflow" {
+				if enriched := exec.enrichSelection(ev.Output); enriched != nil {
+					data["selection"] = enriched
+				}
+			}
+			if ev.Tool == "generate_workflow" {
+				data["yaml"] = ev.Output
+			}
+			sendEvent("tool_result", data)
+		case "text":
+			sendEvent("text", map[string]string{"content": ev.Output})
+		case "done":
+			sendEvent("done", map[string]bool{"ok": true})
+		case "error":
+			sendEvent("error", map[string]string{"error": ev.Error})
+		}
+	})
+	if err != nil && ctx.Err() == nil {
+		sendEvent("error", map[string]string{"error": err.Error()})
+	}
+}
+
+// chatToolExecutor implements ai.ToolExecutor for the chat handler.
+type chatToolExecutor struct {
+	assistant *ai.Assistant
+	registry  *workflow.DirRegistry
+}
+
+func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (string, error) {
+	var params map[string]interface{}
+	json.Unmarshal(input, &params)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	switch name {
+	case "list_workflows":
+		entries, err := e.registry.List()
+		if err != nil {
+			return "", fmt.Errorf("list workflows: %w", err)
+		}
+		result := ""
+
+		for _, entry := range entries {
+			result += fmt.Sprintf("- %s (%s)", entry.Name, entry.FileName)
+			if entry.Description != "" {
+				result += " | " + entry.Description
+			}
+			result += "\n"
+		}
+		if result == "" {
+			result = "(没有可用的工作流)"
+		}
+		return result, nil
+
+	case "select_workflow":
+		intent, _ := params["intent"].(string)
+		entries, err := e.registry.List()
+		if err != nil {
+			return "", fmt.Errorf("list: %w", err)
+		}
+		candidates := entriesToCandidates(e.registry, entries)
+		sel, err := e.assistant.SelectWorkflow(ctx, intent, candidates)
+		if err != nil {
+			return "", err
+		}
+		out, _ := json.Marshal(sel)
+		return string(out), nil
+
+	case "generate_workflow":
+		requirement, _ := params["requirement"].(string)
+		return e.assistant.Generate(ctx, requirement)
+
+	case "modify_workflow":
+		yamlContent, _ := params["yaml"].(string)
+		instruction, _ := params["instruction"].(string)
+		return e.assistant.Modify(ctx, yamlContent, instruction)
+
+	case "explain_workflow":
+		yamlContent, _ := params["yaml"].(string)
+		return e.assistant.Explain(ctx, yamlContent)
+
+	case "validate_workflow":
+		yamlContent, _ := params["yaml"].(string)
+		wf, err := workflow.Parse([]byte(yamlContent))
+		if err != nil {
+			return fmt.Sprintf("❌ 解析失败: %v", err), nil
+		}
+		errs := wf.Validate()
+		if len(errs) == 0 {
+			return fmt.Sprintf("✅ 工作流 '%s' 校验通过 (%d 步)", wf.Name, len(wf.Steps)), nil
+		}
+		msg := fmt.Sprintf("❌ %d 个错误:\n", len(errs))
+		for _, e := range errs {
+			msg += fmt.Sprintf("  - %v\n", e)
+		}
+		return msg, nil
+
+	case "run_workflow":
+		fileName, _ := params["fileName"].(string)
+		vars := make(map[string]string)
+		if v, ok := params["variables"].(map[string]interface{}); ok {
+			for k, val := range v {
+				vars[k] = fmt.Sprintf("%v", val)
+			}
+		}
+		wf, _, err := e.registry.Get(fileName)
+		if err != nil {
+			return "", fmt.Errorf("workflow not found: %s", fileName)
+		}
+		executor := workflow.NewExecutor(vars)
+		result := executor.Execute(wf)
+		return fmt.Sprintf("执行 %s: %s (%d 步)", wf.Name, result.Status, len(result.Steps)), nil
+
+	default:
+		return "", fmt.Errorf("unknown tool: %s", name)
+	}
+}
+
+// enrichSelection parses a select_workflow tool result (JSON) and adds step
+// preview data so the frontend can render a selection card.
+func (e *chatToolExecutor) enrichSelection(raw string) map[string]interface{} {
+	var sel ai.Selection
+	if err := json.Unmarshal([]byte(raw), &sel); err != nil {
+		return nil
+	}
+	if sel.Workflow == "" {
+		return nil
+	}
+	// Find fileName + step summary.
+	data := map[string]interface{}{
+		"workflow":   sel.Workflow,
+		"variables":  sel.Variables,
+		"confidence": sel.Confidence,
+	}
+	entries, _ := e.registry.List()
+	for _, entry := range entries {
+		if entry.Name == sel.Workflow {
+			data["fileName"] = entry.FileName
+			if wf, _, err := e.registry.Get(sel.Workflow); err == nil {
+				data["steps"] = buildStepSummary(wf.Steps)
+			}
+			break
+		}
+	}
+	return data
+}
+
+// entriesToCandidates converts DirRegistry entries to assistant candidates.
+func entriesToCandidates(registry *workflow.DirRegistry, entries []workflow.WorkflowEntry) []ai.CandidateEntry {
 	candidates := make([]ai.CandidateEntry, 0, len(entries))
 	for _, e := range entries {
 		var vars []string
@@ -73,91 +247,14 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 			Description: e.Description, Steps: e.Steps, Variables: vars,
 		})
 	}
-
-	// SSE setup. Disable proxy buffering and compression so tokens flush.
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, errorResp("streaming not supported"))
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no") // nginx
-
-	// Helper to send one SSE event.
-	sendEvent := func(eventType string, data interface{}) {
-		payload, _ := json.Marshal(data)
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
-		flusher.Flush()
-	}
-
-	// Emit a 'thinking' event so the UI can show a spinner immediately.
-	sendEvent("thinking", map[string]interface{}{
-		"message":  req.Message,
-		"workflowCount": len(candidates),
-	})
-
-	// Run the selection with a generous timeout.
-	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
-	defer cancel()
-
-	sel, err := assistant.SelectWorkflow(ctx, req.Message, candidates)
-	if err != nil {
-		sendEvent("error", map[string]string{"error": err.Error()})
-		return
-	}
-
-	// If nothing matched, tell the client and suggest creating one.
-	if sel.Workflow == "" {
-		sendEvent("selection", map[string]interface{}{
-			"workflow":    "",
-			"variables":   map[string]string{},
-			"confidence":  0,
-			"available":   candidateNames(candidates),
-			"suggestCreate": true, // frontend offers a "generate" option
-		})
-		sendEvent("done", map[string]bool{"ok": true})
-		return
-	}
-
-	// Load the chosen workflow to include its step summary + structure in the
-	// response so the UI can show a preview / DAG without a second round-trip.
-	var stepSummary []map[string]interface{}
-	var fileName string
-	if wf, _, gerr := registry.Get(sel.Workflow); gerr == nil {
-		// Find the file name for this workflow (needed by /run which matches
-		// by file name, not YAML name field).
-		for _, e := range entries {
-			if e.Name == sel.Workflow {
-				fileName = e.FileName
-				break
-			}
-		}
-		stepSummary = buildStepSummary(wf.Steps)
-	}
-
-	sendEvent("selection", map[string]interface{}{
-		"workflow":   sel.Workflow,
-		"fileName":   fileName, // for the /run API which matches by file name
-		"variables":  sel.Variables,
-		"confidence": sel.Confidence,
-		"steps":      stepSummary,
-	})
-	sendEvent("done", map[string]bool{"ok": true})
+	return candidates
 }
 
-// buildStepSummary flattens the step tree into a list of step descriptors
-// including structural fields (next, depends_on, then/else branch presence,
-// foreach items, parallel children) so the frontend can render a DAG preview
-// or mermaid graph without a second API call.
+// buildStepSummary flattens the step tree for frontend DAG preview.
 func buildStepSummary(steps []workflow.Step) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(steps))
 	for _, s := range steps {
-		entry := map[string]interface{}{
-			"name":   s.Name,
-			"action": s.Action,
-		}
+		entry := map[string]interface{}{"name": s.Name, "action": s.Action}
 		if len(s.Next) > 0 {
 			entry["next"] = s.Next
 		}
@@ -181,12 +278,4 @@ func buildStepSummary(steps []workflow.Step) []map[string]interface{} {
 		out = append(out, entry)
 	}
 	return out
-}
-
-func candidateNames(cs []ai.CandidateEntry) []string {
-	names := make([]string, 0, len(cs))
-	for _, c := range cs {
-		names = append(names, c.Name)
-	}
-	return names
 }
