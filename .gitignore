@@ -37,6 +37,7 @@ goworkflow-server
 
 # Generated dirs
 .claude/
+.zcode/
 reports/
 screenshots/
 .bak/
