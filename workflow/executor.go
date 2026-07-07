@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -63,6 +64,8 @@ type Executor struct {
 	cumulativeTokens  int
 	aiBudget          int // workflow-level token budget (0 = unlimited)
 	aiMemoryWindow    int // max prior AI turns to keep (0 = unlimited)
+	aiOnError         string // workflow-level on_error: "ai" / "ai_auto" / "" (off)
+	aiOnErrorMode     string // resolved mode for workflow-level default
 	// Replay cache (Phase 4): maps step ID (or Name fallback) to a stored
 	// StepResult. When non-nil, executeStep returns the cached result for
 	// deterministic steps instead of re-executing them. AI / nondeterministic
@@ -331,6 +334,12 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 	e.aiTemperature = wf.AI.Temperature
 	e.aiBudget = wf.AI.Budget
 	e.aiMemoryWindow = wf.AI.MemoryWindow
+	e.aiOnError = wf.AI.OnError
+	if wf.AI.OnError == "ai_auto" {
+		e.aiOnErrorMode = "auto"
+	} else if wf.AI.OnError == "ai" {
+		e.aiOnErrorMode = "suggest"
+	}
 
 	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", 0, "", nil)
 
@@ -843,7 +852,21 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 		}
 	}
 
-attemptLoop:
+	// on_error: ai — outer error-recovery loop.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel2()
+
+	// on_error: ai — outer error-recovery loop. When the step (including its
+	// Phase 6 blind retries) fails AND on_error is configured, the AI analyzes
+	// the failure and may decide to retry/skip/abort/suggest. This outer loop
+	// caps at maxErrorRetries to prevent infinite AI-retry cycles.
+	errorRetries := 0
+	maxErrorRetries := 3
+
+errorRecovery:
+	for {
+		// Inner: Phase 6 blind retry loop.
+	attemptLoop:
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Reset per-attempt state.
 		output = ""
@@ -927,7 +950,58 @@ attemptLoop:
 		} else {
 			result.Retries = attempt
 		}
-	}
+	} // end attemptLoop
+
+		// on_error: ai — if the step still failed after all retries, let AI
+		// analyze and decide what to do.
+		if err != nil && e.shouldAnalyzeError(step) && e.aiProvider != nil && errorRetries < maxErrorRetries {
+			errorRetries++
+			mode := e.errorAnalysisMode(step)
+
+			params := ai.ErrorAnalysisParams{
+				StepName:     step.Name,
+				Action:       step.Action,
+				Command:      e.stepCommandForError(step),
+				Output:       output,
+				Error:        err.Error(),
+				CustomPrompt: step.OnErrorPrompt,
+			}
+			asst := ai.NewAssistant(e.aiProvider)
+			decision, derr := asst.AnalyzeError(ctx2, params)
+			if derr != nil {
+				decision = ai.ErrorDecision{Action: "suggest", Reason: derr.Error()}
+			}
+
+			if e.verbose {
+				fmt.Printf("%s  🤖 on_error: AI 分析 → %s (%s)\n", indent, decision.Action, decision.Reason)
+			}
+
+			switch {
+			case decision.Action == "retry" && mode == "auto":
+				if e.verbose {
+					fmt.Printf("%s  ↻ AI 建议重试 (error recovery %d/%d)\n", indent, errorRetries, maxErrorRetries)
+				}
+				// Reset and re-enter the attempt loop.
+				result.Retries = 0
+				continue errorRecovery
+			case decision.Action == "skip" && mode == "auto":
+				result.Status = "skipped"
+				result.Error = fmt.Sprintf("skipped (AI: %s)", decision.Reason)
+				result.Children = children
+				result.EndTime = Now()
+				e.sendEvent("step_complete", step.Name, stepID, step.Action, "skipped", "", "", depth, parentID, nil)
+				return result
+			case decision.Action == "abort" && mode == "auto":
+				// Fall through to normal failure handling, but augment error.
+				err = fmt.Errorf("%s\nAI 建议中止: %s", err, decision.Reason)
+			case decision.Action == "suggest" || mode == "suggest":
+				// Most conservative: append AI's suggestion to the error.
+				err = fmt.Errorf("%s\nAI 建议: %s", err, decision.Reason)
+			}
+		}
+
+		break errorRecovery
+	} // end errorRecovery
 
 	// Set children for parallel/foreach/condition
 	result.Children = children
@@ -991,5 +1065,46 @@ attemptLoop:
 	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, depth, parentID, result.ConditionResult)
 
 	return result
+}
+
+// shouldAnalyzeError reports whether on_error: ai should fire for this step.
+func (e *Executor) shouldAnalyzeError(step Step) bool {
+	if step.OnError != "" {
+		return step.OnError == "ai" || step.OnError == "ai_auto"
+	}
+	return e.aiOnError == "ai" || e.aiOnError == "ai_auto"
+}
+
+// errorAnalysisMode returns "auto" or "suggest" based on the on_error config.
+func (e *Executor) errorAnalysisMode(step Step) string {
+	mode := step.OnError
+	if mode == "" {
+		mode = e.aiOnErrorMode
+	}
+	if mode == "ai_auto" {
+		return "auto"
+	}
+	return "suggest"
+}
+
+// stepCommandForError extracts the relevant command for the error prompt.
+func (e *Executor) stepCommandForError(step Step) string {
+	switch step.Action {
+	case "shell":
+		if step.Command != "" {
+			return step.Command
+		}
+		return step.Shell
+	case "http":
+		return step.URL
+	case "ai":
+		return step.Prompt
+	case "ai_decide":
+		return step.Question
+	case "script":
+		return step.Code
+	default:
+		return ""
+	}
 }
 

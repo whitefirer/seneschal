@@ -45,6 +45,11 @@ type Config struct {
 	// for each AI step (0 = unlimited, default). Older turns are truncated.
 	// Each turn = one user + one assistant message (2 items in aiHistory).
 	MemoryWindow int `yaml:"memory_window,omitempty" json:"memory_window,omitempty"`
+
+	// OnError enables AI-assisted error recovery for ALL steps when set to
+	// "ai" (suggest-only, safest) or "ai_auto" (auto retry/skip/abort).
+	// Individual steps can override via step.on_error. "" = off (default).
+	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
 }
 
 // IsZero reports whether no AI configuration was provided.

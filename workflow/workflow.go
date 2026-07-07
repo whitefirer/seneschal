@@ -14,6 +14,8 @@ type Step struct {
 	ID             string            `yaml:"id,omitempty"`
 	Action         string            `yaml:"action"` // shell, http, condition, parallel, set, sleep, log, template, foreach
 	ContinueOnError bool             `yaml:"continue_on_error"`
+	OnError         string           `yaml:"on_error,omitempty"`         // "ai" or "ai_auto" for AI-assisted error handling
+	OnErrorPrompt   string           `yaml:"on_error_prompt,omitempty"`  // optional custom prompt for error analysis
 	Retry           int              `yaml:"retry,omitempty"`           // max retries on failure (0 = no retry)
 	RetryDelay      string           `yaml:"retry_delay,omitempty"`     // delay between retries, e.g. "5s"
 	TokenQuota      int              `yaml:"token_quota,omitempty"`     // max total tokens for this AI step (0 = unlimited)
