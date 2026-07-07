@@ -1,0 +1,12 @@
+name: parallel-test
+description: "Parallel execution"
+steps:
+  - name: parallel-jobs
+    action: parallel
+    steps:
+      - name: job-a
+        action: shell
+        command: "echo A"
+      - name: job-b
+        action: shell
+        command: "echo B"
