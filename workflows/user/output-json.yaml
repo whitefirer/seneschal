@@ -1,0 +1,6 @@
+name: output-modes
+description: "Output mode: JSON"
+steps:
+  - name: simple
+    action: shell
+    command: "echo hi"

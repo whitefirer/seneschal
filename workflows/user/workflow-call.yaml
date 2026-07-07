@@ -1,0 +1,10 @@
+name: sub-workflow
+description: "Sub-workflow call (uses absolute path from testdata)"
+steps:
+  - name: call-basic
+    action: workflow
+    source: "testdata/basic.yaml"
+    save_output: sub_result
+  - name: report
+    action: log
+    message: "sub-workflow status: {{.sub_result}}"

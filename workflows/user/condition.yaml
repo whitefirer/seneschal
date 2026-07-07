@@ -1,0 +1,16 @@
+name: condition-test
+description: "Condition branching: then/else"
+variables:
+  env: prod
+steps:
+  - name: check-env
+    action: condition
+    expression: "{{.env}} == prod"
+    then:
+      - name: is-prod
+        action: log
+        message: "production environment"
+    else:
+      - name: not-prod
+        action: log
+        message: "non-production"

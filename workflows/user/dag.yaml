@@ -1,0 +1,15 @@
+name: dag-test
+description: "DAG dependencies: build → test → deploy (fan-out)"
+steps:
+  - name: build
+    action: shell
+    command: "echo building"
+    next: [test, lint]
+  - name: test
+    action: shell
+    command: "echo testing"
+    depends_on: [build]
+  - name: lint
+    action: shell
+    command: "echo linting"
+    depends_on: [build]

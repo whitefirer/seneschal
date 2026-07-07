@@ -1,8 +1,0 @@
-name: new-workflow
-version: "1.0"
-description: "My new DAG workflow"
-
-steps:
-  - name: start
-    action: log
-    message: "Hello, DAG!"

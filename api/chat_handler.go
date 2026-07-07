@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"goworkflow/workflow"
@@ -71,7 +72,22 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 
-	system := "你是 goworkflow AI 助手。根据用户意图选择合适的工具。用中文回复。可用的工具: list_workflows(列出工作流), select_workflow(选已有工作流执行), generate_workflow(创建新工作流), modify_workflow(修改工作流), explain_workflow(解释工作流), validate_workflow(校验工作流), run_workflow(执行工作流)。"
+	system := `你是 goworkflow AI 助手。根据用户意图选择合适的工具。用中文回复。
+
+## 工具使用指南
+- **用户想运行/执行/部署/跑** → 直接调用 select_workflow，不要先 list
+- **用户说"创建/生成/新建"** → 调用 generate_workflow
+- **用户想看有哪些** → 调用 list_workflows
+- **工具返回的结果是可信的** — 如果 list_workflows 返回了内容，说明系统里有工作流。不要说"没有工作流"
+
+## list_workflows 输出格式
+输出是纯文本列表，每行格式: "- <name> (<file>) | <description>"
+例如: "- basic (basic.yaml) | Basic actions: shell, log"
+这表示有一个名为 basic 的工作流。只要列表非空就说明有工作流。
+
+## select_workflow 返回格式
+返回 JSON: {"Workflow": "名称", "Variables": {...}, "Confidence": 0-1}
+如果 Workflow 非空，说明找到了匹配的工作流，告诉用户找到了。`
 
 	err = assistant.RunAgent(ctx, system, req.Message, ai.AgentTools(), exec, 8, func(ev ai.AgentEvent) {
 		// Forward agent events as SSE. For tool_result, try to enrich
@@ -145,13 +161,33 @@ func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (stri
 		if err != nil {
 			return "", fmt.Errorf("list: %w", err)
 		}
+		if len(entries) == 0 {
+			return "没有找到任何工作流。请用 generate_workflow 创建一个新工作流。", nil
+		}
 		candidates := entriesToCandidates(e.registry, entries)
 		sel, err := e.assistant.SelectWorkflow(ctx, intent, candidates)
 		if err != nil {
 			return "", err
 		}
+		if sel.Workflow == "" {
+			return fmt.Sprintf("没有找到匹配 '%s' 的工作流。可用的工作流有: %s", intent, candidateList(candidates)), nil
+		}
+		// Return human-readable text (not JSON) so the model can understand it.
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "找到匹配的工作流: %s\n", sel.Workflow)
+		fmt.Fprintf(&sb, "文件名: (从工作流列表中查找)\n")
+		fmt.Fprintf(&sb, "置信度: %.0f%%\n", sel.Confidence*100)
+		if len(sel.Variables) > 0 {
+			sb.WriteString("建议变量:\n")
+			for k, v := range sel.Variables {
+				fmt.Fprintf(&sb, "  %s = %s\n", k, v)
+			}
+		}
+		// Also store as JSON for frontend enrichment.
 		out, _ := json.Marshal(sel)
-		return string(out), nil
+		// Append a hidden JSON marker the frontend can parse.
+		fmt.Fprintf(&sb, "\n[JSON:%s]", string(out))
+		return sb.String(), nil
 
 	case "generate_workflow":
 		requirement, _ := params["requirement"].(string)
@@ -201,6 +237,14 @@ func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (stri
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+func candidateList(cs []ai.CandidateEntry) string {
+	var parts []string
+	for _, c := range cs {
+		parts = append(parts, c.Name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // enrichSelection parses a select_workflow tool result (JSON) and adds step

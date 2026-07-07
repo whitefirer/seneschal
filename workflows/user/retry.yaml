@@ -1,0 +1,8 @@
+name: retry-test
+description: "Step retry with delay"
+steps:
+  - name: always-succeeds
+    action: shell
+    command: "echo ok"
+    retry: 2
+    retry_delay: "0s"

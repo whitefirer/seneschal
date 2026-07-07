@@ -1,0 +1,11 @@
+name: foreach-test
+description: "Foreach loop"
+steps:
+  - name: iterate
+    action: foreach
+    items: ["alpha", "beta", "gamma"]
+    item_var: item
+    do:
+      - name: process
+        action: log
+        message: "Processing {{.item}}"

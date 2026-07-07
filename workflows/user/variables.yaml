@@ -1,0 +1,9 @@
+name: variables-test
+description: "Variable substitution and --var override"
+variables:
+  name: default
+  count: "3"
+steps:
+  - name: show-vars
+    action: log
+    message: "name={{.name}} count={{.count}}"
