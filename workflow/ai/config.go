@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -81,11 +82,6 @@ func BuildProvider(cfg Config) (Provider, error) {
 		if env := os.Getenv("ANTHROPIC_BASE_URL"); env != "" {
 			baseURL = env
 		}
-		// Model MUST come from config (workflow YAML ai.model, or per-step
-		// step.model). We do NOT hardcode a default — model names are
-		// provider-specific and change over time (e.g. deepseek-chat was
-		// deprecated in favor of deepseek-v4-flash). Leaving it empty lets the
-		// provider surface a clear error if the caller forgot to set it.
 		if cfg.Model == "" {
 			return nil, fmt.Errorf("ai provider %q requires a model: set ai.model in the workflow YAML or ai.Config.Model (e.g. \"deepseek-v4-flash\", \"claude-sonnet-4-5-20250929\")", provider)
 		}
@@ -97,8 +93,27 @@ func BuildProvider(cfg Config) (Provider, error) {
 				Timeout: 120 * time.Second,
 			},
 		}, nil
+	case "ollama":
+		baseURL := cfg.BaseURL
+		if env := os.Getenv("OLLAMA_HOST"); env != "" {
+			// OLLAMA_HOST may be "host:port" without scheme.
+			if !strings.HasPrefix(env, "http") {
+				env = "http://" + env
+			}
+			baseURL = env
+		}
+		if cfg.Model == "" {
+			return nil, fmt.Errorf("ai provider %q requires a model: set ai.model (e.g. \"llama3.2\", \"qwen3:32b\")", provider)
+		}
+		return &OllamaProvider{
+			BaseURL:      baseURL,
+			DefaultModel: cfg.Model,
+			HTTPClient: &http.Client{
+				Timeout: 300 * time.Second, // local models can be slow
+			},
+		}, nil
 	default:
-		return nil, fmt.Errorf("unknown ai provider %q (supported: anthropic)", provider)
+		return nil, fmt.Errorf("unknown ai provider %q (supported: anthropic, ollama)", provider)
 	}
 }
 

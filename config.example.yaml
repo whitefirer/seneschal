@@ -42,3 +42,9 @@ allowed_origins:
 #   budget: 0                                    # 全局 token 上限(input+output),0=不限制
 #   memory_window: 0                             # AI 记忆窗口(保留最近 N 轮对话),0=不限制
 #   max_retries: 3                               # provider HTTP 自动重试次数(429/5xx/超时)
+#
+# 本地模型 (Ollama) — 零 API key、零费用、零网络:
+# ai:
+#   provider: ollama
+#   model: qwen3:32b                              # ollama pull 下载的模型 tag
+#   base_url: http://localhost:11434              # 可选,默认 localhost:11434;也可用 OLLAMA_HOST 环境变量
