@@ -18,6 +18,7 @@
 | 6 | 重试与可靠性(provider 重试 + step retry) | 📋 计划 | 2 |
 | 7 | Token 治理(budget/配额/记忆窗口) | 📋 计划 | 2 |
 | 8 | Inline script action(step 内嵌代码) | 📋 计划 | — |
+| 8.5 | 变量脱敏(敏感数据保护) | 📋 计划 | 5 |
 | 9 | IM 渠道(飞书等) | 📋 计划 | 2, 3, 5 |
 | 10 | 容错(on_error: ai) | 📋 计划 | 2, 6 |
 | 11 | 更多 provider(OpenAI 兼容 / Ollama) | 📋 计划 | 2 |
@@ -227,6 +228,22 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 - [ ] 引擎调对应 runtime(python3/node/ruby),stdin 传变量 JSON,stdout 存 output
 - [ ] 支持变量注入:`{{.var}}` 模板替换 + 环境变量
 - [ ] 和 shell action 的区别:不用写临时文件,代码即配置
+
+---
+
+## Phase 8.5 — 变量脱敏(敏感数据保护) 📋 计划
+
+**目标**:执行者不一定该看到所有变量值(密钥、token、内部配置),展示层脱敏。
+
+### 交付
+- [ ] 变量级 `sensitive: true` 标记(workflow variables + step env)
+- [ ] 引擎层不脱敏(执行时用真实值),展示层脱敏
+- [ ] 脱敏位置:chat 确认卡片、执行详情页、HTML 报告、history show
+- [ ] 脱敏值显示为 `***` 或 `••••`(长度可配)
+- [ ] 权限分层:`admin`(看明文) vs `executor`(看脱敏)——为未来多用户铺路
+
+### 定位
+和 Phase 7(Token 治理)同属"安全/治理"范畴。在多用户场景(Phase 12 sandbox)之前做展示层脱敏,成本低、价值清晰。
 
 ### 用法示例
 ```yaml
