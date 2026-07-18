@@ -32,7 +32,7 @@ func (a *Assistant) AnalyzeError(ctx context.Context, params ErrorAnalysisParams
 		return ErrorDecision{}, fmt.Errorf("assistant: no AI provider configured")
 	}
 
-	system := `你是 goworkflow 工作流错误分析助手。一个步骤失败了,你需要分析失败原因并决定下一步。
+	system := `你是 seneschal 工作流错误分析助手。一个步骤失败了,你需要分析失败原因并决定下一步。
 
 ## 输出规则
 只输出一个 JSON 对象,不要 markdown 围栏,不要解释。

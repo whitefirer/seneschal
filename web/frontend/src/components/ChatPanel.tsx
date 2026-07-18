@@ -28,7 +28,7 @@ interface Message {
   toolSteps?: ToolStep[]   // agent tool use process
 }
 
-const STORAGE_KEY = 'goworkflow-chat-messages'
+const STORAGE_KEY = 'seneschal-chat-messages'
 
 export default function ChatPanel() {
   const navigate = useNavigate()

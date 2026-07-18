@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // templateVarRe matches {{.name}} template variables to determine which

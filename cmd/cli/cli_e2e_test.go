@@ -14,11 +14,11 @@ var binaryPath string
 
 func TestMain(m *testing.M) {
 	// Compile the CLI binary to a temp location.
-	tmp, err := os.MkdirTemp("", "goworkflow-cli-test")
+	tmp, err := os.MkdirTemp("", "seneschal-cli-test")
 	if err != nil {
 		panic(err)
 	}
-	binaryPath = filepath.Join(tmp, "goworkflow-test")
+	binaryPath = filepath.Join(tmp, "seneschal-test")
 	if err := exec.Command("go", "build", "-o", binaryPath, ".").Run(); err != nil {
 		panic(err)
 	}

@@ -1,4 +1,4 @@
-module goworkflow
+module github.com/whitefirer/seneschal
 
 go 1.24.2
 

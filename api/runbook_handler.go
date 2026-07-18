@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"goworkflow/workflow"
+	"github.com/whitefirer/seneschal/workflow"
 )
 
 // RunbookHandler handles runbook CRUD + trigger endpoints.

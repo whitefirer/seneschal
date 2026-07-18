@@ -11,10 +11,10 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"goworkflow/api"
-	"goworkflow/config"
-	"goworkflow/web"
-	"goworkflow/workflow"
+	"github.com/whitefirer/seneschal/api"
+	"github.com/whitefirer/seneschal/config"
+	"github.com/whitefirer/seneschal/web"
+	"github.com/whitefirer/seneschal/workflow"
 )
 
 var staticFiles = web.StaticFiles
@@ -187,7 +187,7 @@ func main() {
 	addr := cfg.Addr()
 	fmt.Printf("\n")
 	fmt.Printf("  ╔═══════════════════════════════════════════╗\n")
-	fmt.Printf("  ║     goworkflow Web UI Server              ║\n")
+	fmt.Printf("  ║     seneschal Web UI Server               ║\n")
 	fmt.Printf("  ╚═══════════════════════════════════════════╝\n")
 	fmt.Printf("\n")
 	// Display URL: for 0.0.0.0 show localhost (most useful), otherwise the

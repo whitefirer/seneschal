@@ -1,6 +1,6 @@
 # 实施路线
 
-本文档是 goworkflow 的分阶段实施路线。每个 Phase 尽量自洽可发布、可回滚。依赖关系单向向后。
+本文档是 seneschal 的分阶段实施路线。每个 Phase 尽量自洽可发布、可回滚。依赖关系单向向后。
 
 产品背景见 [PRODUCT.md](PRODUCT.md),技术细节见 [ARCHITECTURE.md](../ARCHITECTURE.md)。
 
@@ -106,7 +106,7 @@ steps:
     message: "摘要:{{.summary}} | 是否报错:{{.is_error}}"
 ```
 
-`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic DEEPSEEK_API_KEY=xxx goworkflow run demo.yaml` 能跑通,DeepSeek 出摘要与判断。
+`ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic DEEPSEEK_API_KEY=xxx seneschal run demo.yaml` 能跑通,DeepSeek 出摘要与判断。
 
 ---
 
@@ -125,9 +125,9 @@ steps:
 
 ### 验收
 ```bash
-goworkflow chat "部署 staging"   # 找到 deploy-staging.yaml → 问环境变量 → 执行
-goworkflow generate "每晚跑测试并邮件汇报"  # 生成 YAML 草稿 → 确认 → 存盘
-goworkflow explain deploy.yaml    # 解释这段 YAML 在干嘛
+seneschal chat "部署 staging"   # 找到 deploy-staging.yaml → 问环境变量 → 执行
+seneschal generate "每晚跑测试并邮件汇报"  # 生成 YAML 草稿 → 确认 → 存盘
+seneschal explain deploy.yaml    # 解释这段 YAML 在干嘛
 ```
 
 ---
@@ -349,7 +349,7 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
 **目标**:隔离执行环境,让 shell/script action 不污染宿主。和多用户/安全强相关。
 
 ### 轻量方案:WASM(推荐优先)
-- [ ] 嵌入 wazero(纯 Go WASM runtime,零外部依赖,编进 goworkflow 二进制)
+- [ ] 嵌入 wazero(纯 Go WASM runtime,零外部依赖,编进 seneschal 二进制)
 - [ ] script action 支持 `lang: wasm` + `module: xxx.wasm`
 - [ ] host functions:授予 stdin/stdout + 变量注入 + 受限文件系统访问
 - [ ] 天然沙箱:WASM 无 host 授予就无法访问文件系统/网络
@@ -414,7 +414,7 @@ playbook 是渠道(Phase 9)的延伸:不只是"执行结果推到飞书",而是"
 
 ### 通知(hook 的预设应用)
 - [ ] step 级通知:`on_complete: notify`,推送到配置的渠道
-- [ ] 应用级通知配置(`~/.goworkflow/notify.yaml`):webhook URL / Slack / 邮件 / 飞书
+- [ ] 应用级通知配置(`~/.seneschal/notify.yaml`):webhook URL / Slack / 邮件 / 飞书
 - [ ] 前端可配置:Web UI 里选哪些 step 完成时通知、推到哪个渠道
 - [ ] 通知模板:step 结果/workflow 摘要/失败详情
 

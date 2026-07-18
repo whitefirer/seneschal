@@ -1,16 +1,16 @@
 # 技术架构
 
-本文档描述 goworkflow 的技术实现。产品方向见 [docs/PRODUCT.md](docs/PRODUCT.md),实施节奏见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+本文档描述 seneschal 的技术实现。产品方向见 [docs/PRODUCT.md](docs/PRODUCT.md),实施节奏见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 > 本文既是架构文档,也保留开发指南价值(构建命令、约定、注意事项)。
 
 ## 目录结构
 
 ```
-goworkflow/
+seneschal/
 ├── cmd/
-│   ├── cli/main.go        # CLI 入口(goworkflow)
-│   └── server/main.go     # HTTP server 入口(goworkflow-server)
+│   ├── cli/main.go        # CLI 入口(seneschal)
+│   └── server/main.go     # HTTP server 入口(seneschal-server)
 ├── api/                   # HTTP / WebSocket 层
 │   ├── handler.go         # REST handler + 执行编排
 │   ├── websocket.go       # WS hub + 客户端管理
@@ -320,18 +320,18 @@ case "ai_decide":
 
 # 手动
 cd web/frontend && npm run build && cd ../..
-go build -o goworkflow-server ./cmd/server/
-go build -o goworkflow ./cmd/cli/
+go build -o seneschal-server ./cmd/server/
+go build -o seneschal ./cmd/cli/
 
 # 运行 server(默认 127.0.0.1:8888)
 ./start-server.sh
-# 或:./goworkflow-server --port 8888
+# 或:./seneschal-server --port 8888
 
 # 前端开发(Vite HMR)
 cd web/frontend && npm run dev
 ```
 
-模块:`goworkflow`,Go 1.24.2。关键依赖:`gorilla/mux`、`gorilla/websocket`、`gopkg.in/yaml.v3`、`charmbracelet/lipgloss`、`charmbracelet/bubbletea`、`expr-lang/expr`。
+模块:`github.com/whitefirer/seneschal`,Go 1.24.2。关键依赖:`gorilla/mux`、`gorilla/websocket`、`gopkg.in/yaml.v3`、`charmbracelet/lipgloss`、`charmbracelet/bubbletea`、`expr-lang/expr`。
 
 ## 前端
 
@@ -344,7 +344,7 @@ cd web/frontend && npm run dev
 ⚠️ **当前版本未做鉴权**。设计上定位为本机/可信内网工具。
 
 **已做(Phase 1)**:
-- `goworkflow-server` 默认 bind `127.0.0.1`,不暴露公网;
+- `seneschal-server` 默认 bind `127.0.0.1`,不暴露公网;
 - workflow name 路径校验,防 `..` 穿越;
 - WebSocket `CheckOrigin` 收紧。
 

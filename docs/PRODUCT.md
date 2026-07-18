@@ -1,10 +1,10 @@
 # 产品设计文档
 
-本文档描述 goworkflow 的产品定位、设计哲学与长期方向。技术实现细节见 [ARCHITECTURE.md](../ARCHITECTURE.md),实施节奏见 [ROADMAP.md](ROADMAP.md)。
+本文档描述 seneschal 的产品定位、设计哲学与长期方向。技术实现细节见 [ARCHITECTURE.md](../ARCHITECTURE.md),实施节奏见 [ROADMAP.md](ROADMAP.md)。
 
 ## 一、产品定位
 
-goworkflow 是一个 **YAML 驱动的工作流引擎**。两个核心差异化:
+seneschal 是一个 **YAML 驱动的工作流引擎**。两个核心差异化:
 
 1. **AI 可选介入** —— 没配 AI 时是一个确定性的、可重放的工作流引擎;配了 AI 后,可在显式标定的步骤里引入智能,且不破坏其余流程的确定性。
 2. **多渠道触达** —— 同一套引擎与 AI 助手能力,本机 CLI、Web UI、IM Bot(飞书等)、编程 API 都能触发并实时查看执行。
@@ -42,7 +42,7 @@ goworkflow 是一个 **YAML 驱动的工作流引擎**。两个核心差异化:
 
 - A/B 完全契合现有 `action` 抽象,改动最小、围栏最牢。
 - F 打掉 YAML 学习曲线,是降低门槛的关键。
-- D 是产品亮点。D 和 F 合在一起就是一个 `goworkflow chat` 助手:用户说"部署 staging",AI 先判断有没有现成的;有就走 D(选 + 填参 + 跑),没有就走 F(生成草稿 → 用户确认 → 存 → 跑)。
+- D 是产品亮点。D 和 F 合在一起就是一个 `seneschal chat` 助手:用户说"部署 staging",AI 先判断有没有现成的;有就走 D(选 + 填参 + 跑),没有就走 F(生成草稿 → 用户确认 → 存 → 跑)。
 
 ## 四、双确定性模型
 
@@ -129,7 +129,7 @@ goworkflow 是一个 **YAML 驱动的工作流引擎**。两个核心差异化:
 
 ## 六、渠道架构
 
-goworkflow-server 定位为**渠道无关的工作流助手后端**。核心引擎 + AI 助手是渠道无关的,各种渠道只是"翻译层 adapter"。
+seneschal-server 定位为**渠道无关的工作流助手后端**。核心引擎 + AI 助手是渠道无关的,各种渠道只是"翻译层 adapter"。
 
 ### 渠道
 

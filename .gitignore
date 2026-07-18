@@ -32,8 +32,8 @@ test-output/
 
 # Local scripts and tools
 restart.sh
-goworkflow
-goworkflow-server
+seneschal
+seneschal-server
 
 # Generated dirs
 .claude/

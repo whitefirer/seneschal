@@ -1,4 +1,6 @@
-# goworkflow
+# seneschal
+
+> seneschal（觞政，/ˈsɛnɪʃəl/）—— 文人雅集中掌管流程的总管。
 
 一个 YAML 驱动的工作流引擎。用 YAML 描述工作流,一次定义、反复执行;**没配 AI 时是确定性的可重放引擎,配了 AI 后可在标定步骤里引入智能**。
 
@@ -11,14 +13,14 @@
 - **确定优先**:工作流本身是可审、可版控、可重放的蓝图。AI 只在你显式标定的步骤里作为"函数"介入,产出进入变量系统,不破坏其余流程的确定性。
 - **AI 可选,渐进增强**:没有 AI 时一切照常;接入 AI 后,可让某一步做摘要、分类、语义判断,甚至用一句话"把 staging 更到最新"自动选工作流并填参执行。
 - **多渠道触达**:同一套引擎,本机 CLI / Web UI / IM Bot(飞书等)/ 编程 API 都能触发与查看执行。
-- **单二进制部署**:server 内嵌前端,一个 `goworkflow-server` 全部搞定。
+- **单二进制部署**:server 内嵌前端,一个 `seneschal-server` 全部搞定。
 
 ## 三个产物
 
 | 产物 | 路径 | 用途 |
 |---|---|---|
-| `goworkflow` | `cmd/cli/` | 命令行工具,本机运行/校验/TUI 实时查看工作流 |
-| `goworkflow-server` | `cmd/server/` | HTTP + WebSocket 服务,内嵌 React 前端,远程运行/编辑/可视化 |
+| `seneschal` | `cmd/cli/` | 命令行工具,本机运行/校验/TUI 实时查看工作流 |
+| `seneschal-server` | `cmd/server/` | HTTP + WebSocket 服务,内嵌 React 前端,远程运行/编辑/可视化 |
 | `workflow` | `workflow/` | 可复用的 Go 库,核心执行引擎(DAG 调度、变量、多种 action) |
 
 ## 快速开始
@@ -28,19 +30,19 @@
 ./build.sh
 
 # 创建一个工作流
-goworkflow create my-workflow "My first workflow"
+seneschal create my-workflow "My first workflow"
 
 # 运行(详细输出)
-goworkflow run my-workflow.yaml --verbose
+seneschal run my-workflow.yaml --verbose
 
 # 校验语法
-goworkflow validate my-workflow.yaml
+seneschal validate my-workflow.yaml
 
 # 用 TUI 实时查看
-goworkflow run my-workflow.yaml --output-mode tui
+seneschal run my-workflow.yaml --output-mode tui
 
 # 查看示例模板
-goworkflow template
+seneschal template
 ```
 
 ## CLI 命令
@@ -190,7 +192,7 @@ steps:                      # 必填:步骤列表
 
 ### `ai` / `ai_decide` - AI 介入 _(Roadmap)_
 
-> 这是 goworkflow 区别于其他 YAML 工作流工具的核心差异化能力,详见 [docs/PRODUCT.md](docs/PRODUCT.md)。
+> 这是 seneschal 区别于其他 YAML 工作流工具的核心差异化能力,详见 [docs/PRODUCT.md](docs/PRODUCT.md)。
 
 ```yaml
 # ai:让 AI 生成一段文本(摘要、翻译、分类…)
@@ -236,7 +238,7 @@ package main
 
 import (
     "fmt"
-    "goworkflow/workflow"
+    "github.com/whitefirer/seneschal/workflow"
 )
 
 func main() {
@@ -259,9 +261,9 @@ func main() {
 核心理念:**编辑 YAML,重跑,行为改变**。
 
 ```bash
-goworkflow show deploy.yaml     # 查看当前
+seneschal show deploy.yaml     # 查看当前
 # (在任意编辑器里改:把 env 从 dev 改成 prod、加步骤…)
-goworkflow run deploy.yaml --verbose --var ENV=prod
+seneschal run deploy.yaml --verbose --var ENV=prod
 ```
 
 ## 构建
@@ -270,18 +272,18 @@ goworkflow run deploy.yaml --verbose --var ENV=prod
 ./build.sh                    # 前端 + server + cli 一起构建
 # 或手动:
 cd web/frontend && npm run build && cd ../..
-go build -o goworkflow-server ./cmd/server/
-go build -o goworkflow ./cmd/cli/
+go build -o seneschal-server ./cmd/server/
+go build -o seneschal ./cmd/cli/
 ```
 
 ## 服务端运行
 
 ```bash
 ./start-server.sh
-# 或:./goworkflow-server --port 8888
+# 或:./seneschal-server --port 8888
 ```
 
-⚠️ **安全告示**:`goworkflow-server` 默认只监听 `127.0.0.1`,**不要直接暴露到公网**。当前版本未做鉴权,`shell` action 会以服务进程身份执行任意命令。如需远程访问,请放在反向代理(加鉴权、TLS、限流)之后。详见 [ARCHITECTURE.md](ARCHITECTURE.md) 的"安全"章节。
+⚠️ **安全告示**:`seneschal-server` 默认只监听 `127.0.0.1`,**不要直接暴露到公网**。当前版本未做鉴权,`shell` action 会以服务进程身份执行任意命令。如需远程访问,请放在反向代理(加鉴权、TLS、限流)之后。详见 [ARCHITECTURE.md](ARCHITECTURE.md) 的"安全"章节。
 
 ## 进一步阅读
 

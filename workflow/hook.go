@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // HookPhase identifies when in the lifecycle a hook fires.

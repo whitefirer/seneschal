@@ -23,7 +23,7 @@ export default function App() {
           <div className="flex items-center gap-6">
             <Link to="/" className="flex items-center gap-2 font-semibold">
               <Workflow className="h-6 w-6 text-primary" />
-              <span>goworkflow</span>
+              <span>seneschal</span>
             </Link>
             <nav className="flex items-center gap-4">
               {navItems.map((item) => {

@@ -8,10 +8,10 @@ import (
 )
 
 // actionSchemaDoc is embedded into the assistant system prompt so the model
-// knows the exact goworkflow action vocabulary and YAML shape. Keeping it in
+// knows the exact seneschal action vocabulary and YAML shape. Keeping it in
 // one place lets Explain/Fix/Generate/SelectWorkflow share the same knowledge
 // and stay in sync as actions evolve.
-const actionSchemaDoc = `你是一个 goworkflow 工作流专家。goworkflow 是一个 YAML 驱动的工作流引擎。
+const actionSchemaDoc = `你是一个 seneschal 工作流专家。seneschal 是一个 YAML 驱动的工作流引擎。
 
 ## Workflow YAML 结构
 name: <工作流名>              # 必填
@@ -75,7 +75,7 @@ steps:
         action: log
         message: "开发环境,跳过部署"`
 
-// Assistant is the channel-agnostic goworkflow AI helper. It wraps a Provider
+// Assistant is the channel-agnostic seneschal AI helper. It wraps a Provider
 // with workflow-domain knowledge (action schema, examples) and exposes
 // high-level operations: Explain, Fix, Generate, SelectWorkflow.
 //
@@ -310,7 +310,7 @@ func (a *Assistant) Generate(ctx context.Context, requirement string) (string, e
 	req := Request{
 		System: system,
 		Prompt: fmt.Sprintf(
-			"请根据下面的需求生成一个 goworkflow 工作流 YAML。只输出 YAML,不要其他内容。\n\n需求: %s",
+			"请根据下面的需求生成一个 seneschal 工作流 YAML。只输出 YAML,不要其他内容。\n\n需求: %s",
 			requirement),
 	}
 	resp, err := a.provider.Complete(ctx, req)
@@ -341,7 +341,7 @@ func (a *Assistant) Explain(ctx context.Context, yamlContent string) (string, er
 	system := actionSchemaDoc + "\n\n## 示例工作流\n" + exampleWorkflow
 	req := Request{
 		System: system,
-		Prompt: "请用中文解释下面这个 goworkflow 工作流在做什么。" +
+		Prompt: "请用中文解释下面这个 seneschal 工作流在做什么。" +
 			"先一句话概括整体目的,然后逐个步骤说明(动作、作用、关键变量)。" +
 			"如果有条件分支或循环,说明它们的判断/迭代逻辑。用 markdown 列表,简洁。\n\n" +
 			"```yaml\n" + yamlContent + "\n```",
@@ -366,7 +366,7 @@ func (a *Assistant) Fix(ctx context.Context, yamlContent, validationError string
 	req := Request{
 		System: system,
 		Prompt: fmt.Sprintf(
-			"下面这个 goworkflow 工作流有错误,请修复并输出完整的修复版 YAML。\n\n"+
+			"下面这个 seneschal 工作流有错误,请修复并输出完整的修复版 YAML。\n\n"+
 				"校验错误:\n%s\n\n"+
 				"原 YAML:\n```yaml\n%s\n```",
 			validationError, yamlContent),
@@ -394,7 +394,7 @@ func (a *Assistant) Modify(ctx context.Context, yamlContent, instruction string)
 	req := Request{
 		System: system,
 		Prompt: fmt.Sprintf(
-			"请根据指令修改下面这个 goworkflow 工作流,输出修改后的完整 YAML。\n\n"+
+			"请根据指令修改下面这个 seneschal 工作流,输出修改后的完整 YAML。\n\n"+
 				"修改指令:\n%s\n\n"+
 				"原 YAML:\n```yaml\n%s\n```",
 			instruction, yamlContent),

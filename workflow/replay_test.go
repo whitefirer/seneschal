@@ -3,7 +3,7 @@ package workflow
 import (
 	"testing"
 
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 func TestReplay_SmartReuseDeterministic(t *testing.T) {

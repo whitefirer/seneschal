@@ -14,8 +14,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
-	"goworkflow/workflow"
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 var defaultUpgrader = websocket.Upgrader{

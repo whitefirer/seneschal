@@ -1,4 +1,4 @@
-# goworkflow server 配置示例。
+# seneschal server 配置示例。
 #
 # 复制本文件为 server.yaml 并按需修改:
 #   cp config.example.yaml server.yaml
@@ -65,4 +65,4 @@ allowed_origins:
 #   - on: after_step
 #     when: failed
 #     type: shell
-#     command: "echo '{{.step_name}} failed' >> /var/log/goworkflow-errors.log"
+#     command: "echo '{{.step_name}} failed' >> /var/log/seneschal-errors.log"

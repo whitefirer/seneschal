@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"goworkflow/workflow"
+	"github.com/whitefirer/seneschal/workflow"
 )
 
 // e2eTestServer is a fully-wired test server with a real Handler, real

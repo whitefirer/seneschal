@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"goworkflow/workflow"
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // AskExecution handles POST /api/executions/{id}/ask — a free-form question

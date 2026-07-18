@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Goworkflow Server Start/Restart Script
+# Seneschal Server Start/Restart Script
 # Usage: ./start-server.sh [port]
 
 set -e
 
 PORT=${1:-8888}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVER_BIN="$SCRIPT_DIR/goworkflow-server"
-LOG_FILE="/tmp/goworkflow-server.log"
+SERVER_BIN="$SCRIPT_DIR/seneschal-server"
+LOG_FILE="/tmp/seneschal-server.log"
 
 # Colors for output
 RED='\033[0;31m'
@@ -16,7 +16,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}🔄 Goworkflow Server Manager${NC}"
+echo -e "${YELLOW}🔄 Seneschal Server Manager${NC}"
 echo ""
 
 # Check if binary exists

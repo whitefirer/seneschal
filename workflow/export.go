@@ -57,7 +57,7 @@ func renderHTMLReport(r *WorkflowResult) string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>`)
 	b.WriteString(htmlEscape(r.Name))
-	b.WriteString(` — goworkflow 报告</title>
+	b.WriteString(` — seneschal 报告</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 960px; margin: 0 auto; padding: 2rem; line-height: 1.6; background: #fafafa; color: #1a1a1a; }
@@ -127,7 +127,7 @@ func renderHTMLReport(r *WorkflowResult) string {
 		renderStepHTML(&b, &s, "")
 	}
 
-	b.WriteString(`<div class="footer">由 goworkflow 生成</div>
+	b.WriteString(`<div class="footer">由 seneschal 生成</div>
 </body>
 </html>
 `)

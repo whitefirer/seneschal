@@ -181,7 +181,7 @@
 
 **Tool Use**: 支持（在 messages 里传 tools，格式接近 OpenAI）
 
-## 5. goworkflow 实现
+## 5. seneschal 实现
 
 | Provider | 文件 | Complete | Stream | Tool Use | 协议 |
 |---|---|---|---|---|---|

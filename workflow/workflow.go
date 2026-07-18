@@ -1,6 +1,6 @@
 package workflow
 
-import "goworkflow/workflow/ai"
+import "github.com/whitefirer/seneschal/workflow/ai"
 
 // AIConfig is the workflow-level AI configuration (the `ai:` block).
 // It is an alias for ai.Config so workflow YAML parsing reuses the same

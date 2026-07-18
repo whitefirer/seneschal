@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // MockProvider is a test double for ai.Provider + ai.ToolCapableProvider.

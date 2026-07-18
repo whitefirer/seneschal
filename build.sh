@@ -3,7 +3,7 @@ set -e
 
 START_TOTAL=$(date +%s%N)
 
-echo "🔨 Building goworkflow..."
+echo "🔨 Building seneschal..."
 export PATH=$PATH:/usr/local/go/bin
 
 # 1. Build frontend (outputs to web/static/)
@@ -19,9 +19,9 @@ echo "   ✅ Frontend done in ${FE_MS}ms"
 # 2+3. Build CLI and Server binaries in parallel
 echo "📦 Building CLI and Server binaries (parallel)..."
 START_GO=$(date +%s%N)
-go build -o goworkflow ./cmd/cli/ &
+go build -o seneschal ./cmd/cli/ &
 PID_CLI=$!
-go build -o goworkflow-server ./cmd/server/ &
+go build -o seneschal-server ./cmd/server/ &
 PID_SRV=$!
 wait $PID_CLI $PID_SRV
 END_GO=$(date +%s%N)

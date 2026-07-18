@@ -94,7 +94,7 @@ func (p *RichPrinter) printTimelineHeader(wf *Workflow) {
 }
 
 func (p *RichPrinter) printCompactHeader(wf *Workflow) {
-	fmt.Printf("[goworkflow] %s", wf.Name)
+	fmt.Printf("[seneschal] %s", wf.Name)
 	if wf.Version != "" {
 		fmt.Printf(" (v%s)", wf.Version)
 	}

@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // TestExecuteStep_Shell tests a basic shell action via the executor.
@@ -94,7 +94,7 @@ func TestExecuteStep_RetrySuccess(t *testing.T) {
 	wf := &Workflow{
 		Name: "test-retry-ok",
 		Variables: map[string]string{
-			"_flag": "/tmp/goworkflow_test_retry_flag",
+			"_flag": "/tmp/seneschal_test_retry_flag",
 		},
 		Steps: []Step{
 			{Name: "flaky", Action: "shell",
@@ -103,9 +103,9 @@ func TestExecuteStep_RetrySuccess(t *testing.T) {
 		},
 	}
 	// Clean flag
-	delFile("/tmp/goworkflow_test_retry_flag")
+	delFile("/tmp/seneschal_test_retry_flag")
 	result := e.Execute(wf)
-	delFile("/tmp/goworkflow_test_retry_flag")
+	delFile("/tmp/seneschal_test_retry_flag")
 
 	if result.Status != "success" {
 		t.Fatalf("expected success, got %s (err=%s)", result.Status, result.Error)

@@ -9,7 +9,7 @@ import (
 	"time"
 	"net/http"
 
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // StepCallback is called after each step completes (including nested steps).
@@ -183,7 +183,7 @@ func (e *Executor) SetForceColor(v bool) {
 
 // colorEnabled checks if color output is enabled
 func (e *Executor) colorEnabled() bool {
-	if e.forceColor || os.Getenv("GOWORKFLOW_FORCE_COLOR") != "" {
+	if e.forceColor || os.Getenv("SENESCHAL_FORCE_COLOR") != "" {
 		return true
 	}
 	if os.Getenv("NO_COLOR") != "" {
@@ -358,7 +358,7 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 
 	// TUI 模式：真实终端或强制颜色 → run TUI on current goroutine, workflow in background
 	if e.outputMode == OutputModeTUI {
-		if isTerminal() || e.forceColor || os.Getenv("GOWORKFLOW_FORCE_COLOR") != "" {
+		if isTerminal() || e.forceColor || os.Getenv("SENESCHAL_FORCE_COLOR") != "" {
 			return e.runTUI(wf, result)
 		}
 		e.realtimePrinter = nil

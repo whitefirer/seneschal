@@ -161,7 +161,7 @@ func TestFileStore_PathSanitization(t *testing.T) {
 		t.Errorf("ID should round-trip: %q", list[0].ID)
 	}
 	// Confirm /etc/passwd was not touched.
-	if _, err := os.Stat("/etc/passwd.goworkflow-test"); err == nil {
+	if _, err := os.Stat("/etc/passwd.seneschal-test"); err == nil {
 		t.Error("path traversal created a file outside the store dir")
 	}
 }

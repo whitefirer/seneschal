@@ -31,7 +31,7 @@ export const useThemeStore = create<ThemeStore>()(
       },
     }),
     {
-      name: 'goworkflow-theme',
+      name: 'seneschal-theme',
     }
   )
 )
@@ -48,7 +48,7 @@ function updateTheme(theme: 'light' | 'dark' | 'system') {
 }
 
 // Initialize theme on mount
-const storedTheme = localStorage.getItem('goworkflow-theme')
+const storedTheme = localStorage.getItem('seneschal-theme')
 if (storedTheme) {
   try {
     const { state } = JSON.parse(storedTheme)

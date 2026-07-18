@@ -3,7 +3,7 @@ package api
 import (
 	"time"
 
-	"goworkflow/workflow"
+	"github.com/whitefirer/seneschal/workflow"
 )
 
 // API Response types

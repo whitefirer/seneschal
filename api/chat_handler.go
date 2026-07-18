@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"goworkflow/workflow"
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 // ChatHandler handles POST /api/chat — an AI agent that streams
@@ -90,7 +90,7 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 
-	system := `你是 goworkflow AI 助手。根据用户意图选择合适的工具。用中文回复。
+	system := `你是 seneschal AI 助手。根据用户意图选择合适的工具。用中文回复。
 
 ## 核心原则
 你是有上下文记忆的对话助手。记住之前的对话内容。

@@ -353,7 +353,7 @@ func (m *model) listView() string {
 		b.WriteString(prim.Render(strings.Repeat("━", w)) + "\n")
 	}
 
-	title := prim.Bold(true).Render(" goworkflow")
+	title := prim.Bold(true).Render(" seneschal")
 	if m.done {
 		b.WriteString(hermesLine(title+"  "+gray.Render("Ctrl-C to exit"), inner, m.tuiStyle) + "\n")
 	} else {

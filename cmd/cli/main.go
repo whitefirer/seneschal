@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"goworkflow/workflow"
-	"goworkflow/workflow/ai"
+	"github.com/whitefirer/seneschal/workflow"
+	"github.com/whitefirer/seneschal/workflow/ai"
 )
 
 const banner = `
   ╔═══════════════════════════════════════════╗
-  ║       goworkflow - YAML Workflow Engine     ║
+  ║       seneschal - YAML Workflow Engine      ║
   ║  Edit YAML → Change Behavior Automatically ║
   ╚═══════════════════════════════════════════╝
 `
@@ -63,7 +63,7 @@ func main() {
 		cmdTemplate(os.Args[2:])
 	case "list":
 		fmt.Println("List all workflow files in a directory:")
-		fmt.Println("Usage: goworkflow list <directory>")
+		fmt.Println("Usage: seneschal list <directory>")
 		if len(os.Args) > 2 {
 			dir := os.Args[2]
 			entries, err := os.ReadDir(dir)
@@ -139,15 +139,15 @@ func printUsage() {
 	fmt.Println("    template script ai ai_decide workflow")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  goworkflow run deploy.yaml --verbose --var ENV=prod")
-	fmt.Println("  goworkflow run deploy.yaml -m html > report.html")
-	fmt.Println("  goworkflow run deploy.yaml -m json | jq .status")
-	fmt.Println("  goworkflow chat \"部署到staging\"")
-	fmt.Println("  goworkflow generate \"每晚跑测试并通知\"")
-	fmt.Println("  goworkflow explain deploy.yaml")
-	fmt.Println("  goworkflow replay exec-20260707-120000-xxxx")
-	fmt.Println("  goworkflow history list")
-	fmt.Println("  goworkflow runbook trigger nightly-deploy --var env=prod")
+	fmt.Println("  seneschal run deploy.yaml --verbose --var ENV=prod")
+	fmt.Println("  seneschal run deploy.yaml -m html > report.html")
+	fmt.Println("  seneschal run deploy.yaml -m json | jq .status")
+	fmt.Println("  seneschal chat \"部署到staging\"")
+	fmt.Println("  seneschal generate \"每晚跑测试并通知\"")
+	fmt.Println("  seneschal explain deploy.yaml")
+	fmt.Println("  seneschal replay exec-20260707-120000-xxxx")
+	fmt.Println("  seneschal history list")
+	fmt.Println("  seneschal runbook trigger nightly-deploy --var env=prod")
 	fmt.Println()
 }
 
@@ -198,7 +198,7 @@ func cmdRun(args []string) {
 	vars, verbose, dryRun, outputModeStr, themeName, forceColor, tuiStyle, remaining := parseFlags(args)
 	if len(remaining) == 0 {
 		fmt.Println("Error: please specify a workflow YAML file")
-		fmt.Println("Usage: goworkflow run <file.yaml> [--var key=value ...] [--verbose] [--dry-run]")
+		fmt.Println("Usage: seneschal run <file.yaml> [--var key=value ...] [--verbose] [--dry-run]")
 		os.Exit(1)
 	}
 
@@ -278,7 +278,7 @@ func cmdCreate(args []string) {
 
 	if len(remaining) == 0 {
 		fmt.Println("Error: please specify a workflow name")
-		fmt.Println("Usage: goworkflow create <name> [description] [--output file.yaml]")
+		fmt.Println("Usage: seneschal create <name> [description] [--output file.yaml]")
 		os.Exit(1)
 	}
 
@@ -335,7 +335,7 @@ func cmdCreate(args []string) {
 
 	fmt.Printf("✅ Created workflow '%s' → %s\n", name, outputFile)
 	fmt.Println("Edit the YAML file to customize your workflow, then run:")
-	fmt.Printf("  goworkflow run %s --verbose\n", outputFile)
+	fmt.Printf("  seneschal run %s --verbose\n", outputFile)
 }
 
 func cmdValidate(args []string) {
@@ -401,7 +401,7 @@ func aiContext() (context.Context, context.CancelFunc) {
 func cmdExplain(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Error: please specify a workflow YAML file")
-		fmt.Println("Usage: goworkflow explain <file.yaml>")
+		fmt.Println("Usage: seneschal explain <file.yaml>")
 		os.Exit(1)
 	}
 
@@ -429,7 +429,7 @@ func cmdExplain(args []string) {
 func cmdFix(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Error: please specify a workflow YAML file")
-		fmt.Println("Usage: goworkflow fix <file.yaml>")
+		fmt.Println("Usage: seneschal fix <file.yaml>")
 		os.Exit(1)
 	}
 
@@ -464,7 +464,7 @@ func cmdFix(args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	// Print only the YAML so users can redirect: goworkflow fix x.yaml > fixed.yaml
+	// Print only the YAML so users can redirect: seneschal fix x.yaml > fixed.yaml
 	fmt.Print(fixed)
 	if !strings.HasSuffix(fixed, "\n") {
 		fmt.Println()
@@ -477,7 +477,7 @@ func cmdFix(args []string) {
 func cmdGenerate(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Error: please describe the workflow you want")
-		fmt.Println(`Usage: goworkflow generate "<requirement>" [--save file.yaml]`)
+		fmt.Println(`Usage: seneschal generate "<requirement>" [--save file.yaml]`)
 		os.Exit(1)
 	}
 
@@ -589,7 +589,7 @@ func cmdChat(args []string) {
 		os.Exit(1)
 	}
 	if len(entries) == 0 {
-		fmt.Fprintf(os.Stderr, "No workflows found in %s. Use 'goworkflow generate' to create one.\n", dir)
+		fmt.Fprintf(os.Stderr, "No workflows found in %s. Use 'seneschal generate' to create one.\n", dir)
 		os.Exit(1)
 	}
 
@@ -619,7 +619,7 @@ func cmdChat(args []string) {
 		os.Exit(1)
 	}
 	if sel.Workflow == "" {
-		fmt.Println("🤔 No matching workflow found. Try 'goworkflow generate' to create one.")
+		fmt.Println("🤔 No matching workflow found. Try 'seneschal generate' to create one.")
 		os.Exit(0)
 	}
 
@@ -739,7 +739,7 @@ func filepathBase(p string) string {
 func cmdReplay(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Error: please specify an execution ID")
-		fmt.Println("Usage: goworkflow replay <exec-id> [--dir DIR] [--full] [--step NAME]")
+		fmt.Println("Usage: seneschal replay <exec-id> [--dir DIR] [--full] [--step NAME]")
 		os.Exit(1)
 	}
 
@@ -810,17 +810,17 @@ func cmdReplay(args []string) {
 
 // cmdHistory manages execution history: list, show, purge, delete.
 // Usage:
-//   goworkflow history list [--dir DIR]
-//   goworkflow history show <id> [--dir DIR]
-//   goworkflow history purge [--dir DIR] [--keep N]
-//   goworkflow history delete <id> [--dir DIR]
+//   seneschal history list [--dir DIR]
+//   seneschal history show <id> [--dir DIR]
+//   seneschal history purge [--dir DIR] [--keep N]
+//   seneschal history delete <id> [--dir DIR]
 func cmdHistory(args []string) {
 	if len(args) == 0 {
 		fmt.Println(`Usage:
-  goworkflow history list [--dir DIR]
-  goworkflow history show <id> [--dir DIR]
-  goworkflow history purge [--dir DIR] [--keep N]
-  goworkflow history delete <id> [--dir DIR]`)
+  seneschal history list [--dir DIR]
+  seneschal history show <id> [--dir DIR]
+  seneschal history purge [--dir DIR] [--keep N]
+  seneschal history delete <id> [--dir DIR]`)
 		return
 	}
 	sub := args[0]
@@ -992,10 +992,10 @@ func sortedKeys(m map[string]string) []string {
 func cmdRunbook(args []string) {
 	if len(args) == 0 {
 		fmt.Println(`Usage:
-  goworkflow runbook list [--dir DIR] [--server URL]
-  goworkflow runbook show <name> [--dir DIR] [--server URL]
-  goworkflow runbook trigger <name> [--var key=val ...] [--dir DIR] [--server URL]
-  goworkflow runbook create <name> --workflow <file> [--cron "..."] [--webhook "/path"] [--var key=val ...] [--dir DIR]`)
+  seneschal runbook list [--dir DIR] [--server URL]
+  seneschal runbook show <name> [--dir DIR] [--server URL]
+  seneschal runbook trigger <name> [--var key=val ...] [--dir DIR] [--server URL]
+  seneschal runbook create <name> --workflow <file> [--cron "..."] [--webhook "/path"] [--var key=val ...] [--dir DIR]`)
 		return
 	}
 
@@ -1347,7 +1347,7 @@ func cmdEdit(args []string) {
 	} else {
 		fmt.Printf("📝 File: %s\n", filePath)
 		fmt.Println("Edit this file to change workflow behavior. After editing, run:")
-		fmt.Printf("  goworkflow run %s --verbose\n", filePath)
+		fmt.Printf("  seneschal run %s --verbose\n", filePath)
 	}
 }
 
