@@ -10,7 +10,7 @@ const (
 	StatusFailed    = "failed"
 	StatusSkipped   = "skipped"
 	StatusRunning   = "running"
-	StatusCompleted = "completed" // legacy alias of success (foreach); printers treat both as success
+	StatusCompleted = "completed" // legacy alias of success; printers treat both as success
 	StatusDone      = "done"      // legacy alias of success
 	StatusPartial   = "partial"
 )

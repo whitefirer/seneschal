@@ -21,7 +21,8 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 	if len(items) == 0 {
 		return StepResult{
 			Name:   container.Name,
-			Status: "completed",
+			Action: container.Action,
+			Status: "success",
 		}
 	}
 
@@ -56,10 +57,11 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		graph, err := e.buildDAGGraph(container.Do)
 		if err != nil {
 			return StepResult{
-				Name:   container.Name,
-				Action: container.Action,
-				Status: "failed",
-				Error:  fmt.Sprintf("iteration %d: build DAG graph: %v", i, err),
+				Name:     container.Name,
+				Action:   container.Action,
+				Status:   "failed",
+				Error:    fmt.Sprintf("iteration %d: build DAG graph: %v", i, err),
+				Children: allChildren,
 			}
 		}
 
@@ -67,10 +69,11 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		order, err := e.topologicalSort(graph)
 		if err != nil {
 			return StepResult{
-				Name:   container.Name,
-				Action: container.Action,
-				Status: "failed",
-				Error:  fmt.Sprintf("iteration %d: topological sort: %v", i, err),
+				Name:     container.Name,
+				Action:   container.Action,
+				Status:   "failed",
+				Error:    fmt.Sprintf("iteration %d: topological sort: %v", i, err),
+				Children: allChildren,
 			}
 		}
 
@@ -195,11 +198,13 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		}
 
 		if hasError {
+			// 迭代失败:已收集的 children(含前序迭代成果和失败步骤本身)保留在结果中
 			return StepResult{
-				Name:   container.Name,
-				Action: container.Action,
-				Status: "failed",
-				Error:  firstErr,
+				Name:     container.Name,
+				Action:   container.Action,
+				Status:   "failed",
+				Error:    firstErr,
+				Children: allChildren,
 			}
 		}
 	}
@@ -294,8 +299,14 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	} else if container.Action == "parallel" {
 		children = container.Steps
 	} else if container.Action == "foreach" || container.Action == "loop" {
-		// Foreach: 迭代执行
-		return e.executeForeach(container, depth, result, parentID)
+		// Foreach: 迭代执行。这里提前返回,但必须像下方常规完成路径一样发出
+		// 容器完成事件,否则 TUI/WS 上该容器一直显示 running。
+		sr := e.executeForeach(container, depth, result, parentID)
+		if sr.Status == "failed" {
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", sr.Error, "", depth, parentID, nil)
+		}
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, sr.Status, "", "", depth, parentID, nil)
+		return sr
 	}
 
 	childWf.Steps = children

@@ -244,7 +244,7 @@ func (wf *Workflow) PrintWorkflow(w io.Writer) error {
 // 规则：
 // 1. 递归填充运行时元数据（ParentId/BranchType/BranchIndex）
 // 2. 主流程相邻节点自动添加 next/depends_on
-// 3. 容器内子节点按顺序添加依赖（支持子节点间的 next/depends_on）
+// 3. 容器内子节点按顺序添加依赖（parallel 子节点除外：默认并行，仅显式 next/depends_on 生效）
 // 4. next → depends_on 反向推断
 // 5. 显式依赖优先（如果已有则不覆盖）
 // 6. 验证依赖关系合法性
@@ -322,10 +322,32 @@ func (wf *Workflow) inferLinearDependencies(steps []Step) {
 			wf.inferLinearDependencies(step.Then)
 			wf.inferLinearDependencies(step.Else)
 		} else if step.Action == "parallel" {
-			wf.inferLinearDependencies(step.Steps)
+			// Parallel 子节点默认并行：不做相邻链化（与
+			// inferContainerDependenciesRecursive 的设计意图一致），
+			// 只递归处理子节点内部嵌套的容器。
+			for j := range step.Steps {
+				wf.inferNestedContainerLinearDependencies(&step.Steps[j])
+			}
 		} else if step.Action == "foreach" || step.Action == "loop" {
 			wf.inferLinearDependencies(step.Do)
 		}
+	}
+}
+
+// inferNestedContainerLinearDependencies 只递归处理 step 内部嵌套容器的子节点
+// 线性依赖，不对 step 所在的兄弟切片做链化。供 parallel 分支使用：parallel 的
+// 直接子节点默认并行，但子节点若是容器，其内部仍按各自语义推断
+// （condition/foreach 线性、嵌套 parallel 并行）。
+func (wf *Workflow) inferNestedContainerLinearDependencies(step *Step) {
+	if step.Action == "condition" {
+		wf.inferLinearDependencies(step.Then)
+		wf.inferLinearDependencies(step.Else)
+	} else if step.Action == "parallel" {
+		for j := range step.Steps {
+			wf.inferNestedContainerLinearDependencies(&step.Steps[j])
+		}
+	} else if step.Action == "foreach" || step.Action == "loop" {
+		wf.inferLinearDependencies(step.Do)
 	}
 }
 

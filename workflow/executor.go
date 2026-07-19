@@ -1222,6 +1222,10 @@ errorRecovery:
 	if err != nil {
 		result.Status = "failed"
 		result.Error = err.Error()
+		// http 失败(非 2xx)时响应体已在 output 中,保留到结果里便于排查
+		if step.Action == "http" && output != "" {
+			result.Output = output
+		}
 		if e.richPrinter != nil {
 			e.richPrinter.PrintStepResult(step.Name, "failed", err.Error(), result.Duration, depth)
 		} else if e.verbose {

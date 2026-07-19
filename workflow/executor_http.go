@@ -45,8 +45,9 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 		}
 	}
 
-	// 复用共享 httpClient(共享 transport/连接池),用 request context 控制每步超时
-	req, err := http.NewRequestWithContext(context.Background(), method, url, bodyReader)
+	// 复用共享 httpClient(共享 transport/连接池),用 request context 控制每步超时;
+	// 请求从执行上下文派生,TUI 取消/中止会传播到在途请求
+	req, err := http.NewRequestWithContext(e.executionContext(), method, url, bodyReader)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
@@ -98,6 +99,11 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 		if jsonData, err := json.Marshal(resultData); err == nil {
 			e.context.Set(step.SaveOutput, string(jsonData))
 		}
+	}
+
+	// 非 2xx 视为步骤失败,error 携带状态码;响应体仍随 output 返回,便于排查
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return output, fmt.Errorf("HTTP request failed: %s", resp.Status)
 	}
 
 	return output, nil

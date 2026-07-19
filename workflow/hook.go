@@ -84,7 +84,7 @@ func executeHook(hook HookConfig, event HookEvent, e *Executor) HookResult {
 		fireWebhook(hook, event)
 		return HookResult{}
 	case "shell":
-		fireShellHook(hook, event)
+		fireShellHook(hook, event, e)
 		return HookResult{}
 	case "ai":
 		return fireAIHook(hook, event, e)
@@ -128,13 +128,15 @@ func fireWebhook(hook HookConfig, event HookEvent) {
 }
 
 // fireShellHook runs a shell command with template substitution. Non-blocking.
-func fireShellHook(hook HookConfig, event HookEvent) {
+// The command derives from the run's execution context, so canceling the run
+// (e.g. TUI quit) kills an in-flight hook command instead of leaking it.
+func fireShellHook(hook HookConfig, event HookEvent, e *Executor) {
 	cmd := resolveHookTemplate(hook.Command, event)
 	if cmd == "" {
 		return
 	}
 	// Run via sh -c for flexibility (pipes, redirects, etc.)
-	c := exec.CommandContext(context.Background(), "sh", "-c", cmd)
+	c := exec.CommandContext(e.executionContext(), "sh", "-c", cmd)
 	c.Env = buildHookEnv(event)
 	// Discard output — hook side effects matter, not stdout.
 	c.Run()

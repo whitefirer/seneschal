@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -59,24 +58,25 @@ func TestActionForeach(t *testing.T) {
 			wantOutputs:  []string{"restarting web", "restarting api"},
 		},
 		{
-			// NOTE: engine behavior — an empty foreach reports container status
-			// "completed" (not the usual "success") and produces no children.
-			name: "empty items completes without children",
+			name: "empty items succeeds without children",
 			step: Step{
 				Name: "iterate", Action: "foreach", Items: []interface{}{},
 				Do: []Step{{Name: "process", Action: "log", Message: "never"}},
 			},
-			wantStatus: "success", wantStepStatus: "completed",
+			wantStatus: "success", wantStepStatus: "success",
 			wantChildren: 0,
 		},
 		{
+			// A failing iteration fails the container but keeps the children
+			// collected so far (here: the failed step of iteration 0).
 			name: "failing iteration fails the container",
 			step: Step{
 				Name: "iterate", Action: "foreach", Items: []interface{}{"a", "b"},
 				Do: []Step{{Name: "process", Action: "shell", Command: "exit 1"}},
 			},
 			wantStatus: "failed", wantStepStatus: "failed",
-			wantErr: "iteration 0",
+			wantChildren: 1,
+			wantErr:      "iteration 0",
 		},
 	}
 	for _, tt := range tests {
@@ -141,6 +141,107 @@ func TestActionForeach_IterationVariables(t *testing.T) {
 	}
 	if got := e.GetContext().Get("item_index"); got != "2" {
 		t.Errorf("context item_index=%q, want 2 (last iteration index)", got)
+	}
+}
+
+// TestActionForeach_FailureRetainsChildren verifies that a mid-iteration
+// failure keeps the children collected so far (previous iterations' results
+// plus the failed step itself) on the container result instead of dropping
+// them.
+func TestActionForeach_FailureRetainsChildren(t *testing.T) {
+	e := newQuietExecutor(nil)
+	wf := &Workflow{
+		Name: "foreach-partial",
+		Steps: []Step{{
+			Name: "iterate", Action: "foreach",
+			Items: []interface{}{"a", "b", "c"}, ItemVar: "item",
+			Do: []Step{{Name: "process", Action: "shell", Command: `test "{{.item}}" != "b"`}},
+		}},
+	}
+	result := e.Execute(wf)
+	if result.Status != "failed" {
+		t.Fatalf("status=%s, want failed (err=%s)", result.Status, result.Error)
+	}
+	sr := result.Steps[0]
+	if sr.Status != "failed" {
+		t.Fatalf("container status=%s, want failed", sr.Status)
+	}
+	// Iteration 0 succeeded, iteration 1 failed → 2 children retained;
+	// iteration 2 never ran.
+	if len(sr.Children) != 2 {
+		t.Fatalf("children=%d, want 2 (success of iteration 0 + failure of iteration 1)", len(sr.Children))
+	}
+	if sr.Children[0].Status != "success" {
+		t.Errorf("child[0] status=%s, want success", sr.Children[0].Status)
+	}
+	if sr.Children[1].Status != "failed" {
+		t.Errorf("child[1] status=%s, want failed", sr.Children[1].Status)
+	}
+}
+
+// TestActionForeach_ContainerCompleteEvents verifies that a top-level foreach
+// (which goes through executeContainerDAG's early-return branch) still emits
+// step_complete — previously the TUI/WS showed the container running forever.
+func TestActionForeach_ContainerCompleteEvents(t *testing.T) {
+	tests := []struct {
+		name       string
+		step       Step
+		wantStatus string
+	}{
+		{
+			name: "success emits step_complete",
+			step: Step{
+				Name: "iterate", Action: "foreach", Items: []interface{}{"a"},
+				Do: []Step{{Name: "process", Action: "log", Message: "hi"}},
+			},
+			wantStatus: "success",
+		},
+		{
+			name: "empty items emits step_complete",
+			step: Step{
+				Name: "iterate", Action: "foreach", Items: []interface{}{},
+				Do: []Step{{Name: "process", Action: "log", Message: "never"}},
+			},
+			wantStatus: "success",
+		},
+		{
+			name: "failure emits step_complete",
+			step: Step{
+				Name: "iterate", Action: "foreach", Items: []interface{}{"a"},
+				Do: []Step{{Name: "process", Action: "shell", Command: "exit 1"}},
+			},
+			wantStatus: "failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newQuietExecutor(nil)
+			var mu sync.Mutex
+			var starts, completes []string
+			e.OnProgress = func(ev ProgressEvent) {
+				// Only the container's own events, not the do-children's.
+				if ev.Name != "iterate" {
+					return
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				switch ev.Type {
+				case "step_start":
+					starts = append(starts, ev.Status)
+				case "step_complete":
+					completes = append(completes, ev.Status)
+				}
+			}
+			e.Execute(&Workflow{Name: "foreach-events", Steps: []Step{tt.step}})
+			mu.Lock()
+			defer mu.Unlock()
+			if len(starts) != 1 {
+				t.Errorf("step_start events for container=%d (%v), want 1", len(starts), starts)
+			}
+			if len(completes) != 1 || completes[0] != tt.wantStatus {
+				t.Errorf("step_complete events=%v, want exactly one with status %q", completes, tt.wantStatus)
+			}
+		})
 	}
 }
 
@@ -280,8 +381,8 @@ func TestExecCondition_BranchExecution(t *testing.T) {
 
 // TestActionParallel drives the parallel container end-to-end via Execute.
 // Child concurrency is covered separately by
-// TestExecuteContainerDAG_ParallelConcurrency (Execute currently chains
-// parallel children — see TestActionParallel_ExecuteChainsChildren).
+// TestExecuteContainerDAG_ParallelConcurrency (direct executeContainerDAG) and
+// TestActionParallel_ExecuteRunsChildrenConcurrently (end-to-end via Execute).
 func TestActionParallel(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -404,39 +505,63 @@ func TestExecuteContainerDAG_ParallelConcurrency(t *testing.T) {
 	}
 }
 
-// TestActionParallel_ExecuteChainsChildren documents CURRENT engine behavior:
-// driven through Execute(), parallel children are linearly chained by
-// InferDependencies (inferLinearDependencies recurses into parallel.Steps),
-// so they execute one per wave in definition order instead of concurrently.
-// This contradicts the "parallel 子节点默认并行（不添加依赖）" intent in
-// parser.go's inferContainerDependenciesRecursive — reported as a bug; this
-// test pins the actual behavior so a fix flips it loudly.
-func TestActionParallel_ExecuteChainsChildren(t *testing.T) {
+// TestActionParallel_ExecuteRunsChildrenConcurrently drives a parallel
+// container end-to-end via Execute() and asserts the children really run
+// concurrently: InferDependencies must not linear-chain parallel children
+// (regression — inferLinearDependencies used to recurse into parallel.Steps,
+// serializing the children one per wave). p1/p2 use a rendezvous script that
+// only succeeds when both overlap; the in-flight child count is tracked
+// through progress events.
+func TestActionParallel_ExecuteRunsChildrenConcurrently(t *testing.T) {
 	dir := t.TempDir()
 	e := newQuietExecutor(nil)
+
+	var mu sync.Mutex
+	inFlight, maxInFlight := 0, 0
+	e.OnProgress = func(ev ProgressEvent) {
+		// Only count the child steps — the container emits start/complete too.
+		if ev.Name != "p1" && ev.Name != "p2" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch ev.Type {
+		case "step_start":
+			inFlight++
+			if inFlight > maxInFlight {
+				maxInFlight = inFlight
+			}
+		case "step_complete":
+			inFlight--
+		}
+	}
+
 	wf := &Workflow{
-		Name: "parallel-chained",
+		Name: "parallel-concurrent",
 		Steps: []Step{{
 			Name: "par", Action: "parallel",
 			Steps: []Step{
-				{Name: "p1", Action: "shell", Command: "touch " + dir + "/p1.done"},
-				// Succeeds only if p1 already finished — under the current
-				// linear-chain inference this always holds.
-				{Name: "p2", Action: "shell", Command: "test -f " + dir + "/p1.done"},
+				{Name: "p1", Action: "shell", Command: rendezvousScript(dir, "p1", "p2")},
+				{Name: "p2", Action: "shell", Command: rendezvousScript(dir, "p2", "p1")},
 				{Name: "p3", Action: "log", Message: "tail"},
 			},
 		}},
 	}
 	result := e.Execute(wf)
 	if result.Status != "success" {
-		t.Fatalf("status=%s err=%s (p2 ran before p1 finished → children NOT chained?)", result.Status, result.Error)
+		t.Fatalf("status=%s err=%s (rendezvous failed: children did not run concurrently)", result.Status, result.Error)
+	}
+	if maxInFlight < 2 {
+		t.Errorf("maxInFlight=%d, want >=2 (p1 and p2 overlapped in one wave)", maxInFlight)
 	}
 	sr := result.Steps[0]
-	// Chained children run one per wave, so container children appear in
-	// definition order (a parallel wave would not guarantee p1 before p2).
-	got := stepNames(sr.Children)
-	if want := []string{"p1", "p2", "p3"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("children order=%v, want %v (linear chain via inference)", got, want)
+	if len(sr.Children) != 3 {
+		t.Fatalf("children=%d, want 3", len(sr.Children))
+	}
+	for _, c := range sr.Children {
+		if c.Status != "success" {
+			t.Errorf("child %s status=%s, want success", c.Name, c.Status)
+		}
 	}
 }
 
@@ -580,12 +705,13 @@ func TestActionHTTP(t *testing.T) {
 			},
 		},
 		{
-			// NOTE: engine behavior — a non-2xx response is NOT an error; the
-			// step succeeds and the status code is recorded in the output.
-			name:       "500 response still succeeds",
+			// A non-2xx response fails the step; the error carries the status
+			// code and the response body stays in the step output.
+			name:       "500 response fails the step",
 			step:       Step{Name: "get-fail", Action: "http", URL: srv.URL + "/fail"},
-			wantStatus: "success", wantStep: "success",
+			wantStatus: "failed", wantStep: "failed",
 			wantOut: []string{"Status: 500", "boom"},
+			wantErr: "500",
 		},
 		{
 			name:       "connection refused fails the step",
