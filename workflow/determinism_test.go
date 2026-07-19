@@ -94,19 +94,19 @@ func TestPropagateDeterminism_IDNameMismatch(t *testing.T) {
 
 func TestParseBoolAnswer(t *testing.T) {
 	cases := map[string]bool{
-		"true":         true,
-		"True":         true,
-		"TRUE":         true,
-		"yes":          true,
-		"1":            true,
-		"是":            true,
-		"false":        false,
-		"no":           false,
-		"0":            false,
-		"否":            false,
+		"true":                true,
+		"True":                true,
+		"TRUE":                true,
+		"yes":                 true,
+		"1":                   true,
+		"是":                   true,
+		"false":               false,
+		"no":                  false,
+		"0":                   false,
+		"否":                   false,
 		"The answer is true.": true, // first token after punctuation split
-		"":             false,
-		"maybe":        false,
+		"":                    false,
+		"maybe":               false,
 	}
 	for in, want := range cases {
 		if got := parseBoolAnswer(in); got != want {

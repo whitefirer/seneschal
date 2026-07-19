@@ -12,12 +12,12 @@ func TestFileStore_SaveGetRoundTrip(t *testing.T) {
 
 	snap := ExecutionSnapshot{
 		ExecutionSummary: ExecutionSummary{
-			ID:            "exec-test-1",
-			WorkflowName:  "demo",
-			Status:        "success",
-			StartTime:     "2026-07-07T10:00:00+08:00",
-			EndTime:       "2026-07-07T10:00:05+08:00",
-			StepsCount:    2,
+			ID:           "exec-test-1",
+			WorkflowName: "demo",
+			Status:       "success",
+			StartTime:    "2026-07-07T10:00:00+08:00",
+			EndTime:      "2026-07-07T10:00:05+08:00",
+			StepsCount:   2,
 		},
 		Steps: []StepResult{
 			{Name: "build", ID: "build", Status: "success", Output: "ok"},

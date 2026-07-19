@@ -10,36 +10,36 @@ type AIConfig = ai.Config
 
 // Step represents a single unit of work in a workflow.
 type Step struct {
-	Name           string            `yaml:"name"`
-	ID             string            `yaml:"id,omitempty"`
-	Action         string            `yaml:"action"` // shell, http, condition, parallel, set, sleep, log, template, foreach
-	ContinueOnError bool             `yaml:"continue_on_error"`
-	OnError         string           `yaml:"on_error,omitempty"`         // "ai" or "ai_auto" for AI-assisted error handling
-	OnErrorPrompt   string           `yaml:"on_error_prompt,omitempty"`  // optional custom prompt for error analysis
-	Retry           int              `yaml:"retry,omitempty"`           // max retries on failure (0 = no retry)
-	RetryDelay      string           `yaml:"retry_delay,omitempty"`     // delay between retries, e.g. "5s"
-	TokenQuota      int              `yaml:"token_quota,omitempty"`     // max total tokens for this AI step (0 = unlimited)
-	Description    string            `yaml:"description,omitempty"`
+	Name            string `yaml:"name"`
+	ID              string `yaml:"id,omitempty"`
+	Action          string `yaml:"action"` // shell, http, condition, parallel, set, sleep, log, template, foreach
+	ContinueOnError bool   `yaml:"continue_on_error"`
+	OnError         string `yaml:"on_error,omitempty"`        // "ai" or "ai_auto" for AI-assisted error handling
+	OnErrorPrompt   string `yaml:"on_error_prompt,omitempty"` // optional custom prompt for error analysis
+	Retry           int    `yaml:"retry,omitempty"`           // max retries on failure (0 = no retry)
+	RetryDelay      string `yaml:"retry_delay,omitempty"`     // delay between retries, e.g. "5s"
+	TokenQuota      int    `yaml:"token_quota,omitempty"`     // max total tokens for this AI step (0 = unlimited)
+	Description     string `yaml:"description,omitempty"`
 
 	// Shell action
-	Command string `yaml:"command,omitempty"`
-	Shell   string `yaml:"shell,omitempty"` // default: sh on unix, cmd on windows
-	Dir     string `yaml:"dir,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	OutputVar string `yaml:"output_var,omitempty"` // save entire output to single variable
-	OutputVars []string `yaml:"output_vars,omitempty"` // parse KEY=VALUE lines, save each as variable
+	Command    string            `yaml:"command,omitempty"`
+	Shell      string            `yaml:"shell,omitempty"` // default: sh on unix, cmd on windows
+	Dir        string            `yaml:"dir,omitempty"`
+	Env        map[string]string `yaml:"env,omitempty"`
+	OutputVar  string            `yaml:"output_var,omitempty"`  // save entire output to single variable
+	OutputVars []string          `yaml:"output_vars,omitempty"` // parse KEY=VALUE lines, save each as variable
 
 	// HTTP action
-	URL         string            `yaml:"url,omitempty"`
-	Method      string            `yaml:"method,omitempty"` // GET, POST, PUT, DELETE
-	Headers     map[string]string `yaml:"headers,omitempty"`
-	Body        string            `yaml:"body,omitempty"`
-	Timeout     string            `yaml:"timeout,omitempty"` // e.g. "30s"
-	SaveOutput  string            `yaml:"save_output,omitempty"` // save response to variable
+	URL        string            `yaml:"url,omitempty"`
+	Method     string            `yaml:"method,omitempty"` // GET, POST, PUT, DELETE
+	Headers    map[string]string `yaml:"headers,omitempty"`
+	Body       string            `yaml:"body,omitempty"`
+	Timeout    string            `yaml:"timeout,omitempty"`     // e.g. "30s"
+	SaveOutput string            `yaml:"save_output,omitempty"` // save response to variable
 
 	// Condition action
-	Expression string `yaml:"expression,omitempty" json:"expression,omitempty"`  // 也支持 if 字段
-	If         string `yaml:"if,omitempty"`  // 条件表达式（别名）
+	Expression string `yaml:"expression,omitempty" json:"expression,omitempty"` // 也支持 if 字段
+	If         string `yaml:"if,omitempty"`                                     // 条件表达式（别名）
 	Then       []Step `yaml:"then,omitempty"`
 	Else       []Step `yaml:"else,omitempty"`
 
@@ -67,9 +67,9 @@ type Step struct {
 	Code string `yaml:"code,omitempty"`
 
 	// Foreach action
-	Items    interface{} `yaml:"items,omitempty"` // string (variable name) or list
-	ItemVar  string      `yaml:"item_var,omitempty"` // loop variable name, default: "item"
-	Do       []Step      `yaml:"do,omitempty"`
+	Items   interface{} `yaml:"items,omitempty"`    // string (variable name) or list
+	ItemVar string      `yaml:"item_var,omitempty"` // loop variable name, default: "item"
+	Do      []Step      `yaml:"do,omitempty"`
 
 	// AI action (action: "ai")
 	// Prompt is the user message; supports {{.var}} templates. By default only
@@ -85,13 +85,13 @@ type Step struct {
 	SaveOutputFormat string `yaml:"save_output_format,omitempty"`
 	// Memory explicitly declares which upstream steps' AI output to include as
 	// conversation history. Empty = automatic (all prior AI steps' turns).
-	Memory   []string `yaml:"memory,omitempty"`
-	Hooks    []HookConfig `yaml:"hooks,omitempty"`           // lifecycle hooks for this step
+	Memory []string     `yaml:"memory,omitempty"`
+	Hooks  []HookConfig `yaml:"hooks,omitempty"` // lifecycle hooks for this step
 
 	// DAG support (依赖关系和下一节点)
-	Next       []string `yaml:"next,omitempty"`       // 指定下一节点列表（DAG模式）
-	DependsOn  []string `yaml:"depends_on,omitempty"` // 依赖的节点列表（DAG模式）
-	JoinMode   string   `yaml:"join_mode,omitempty"`  // 汇合模式: "all" (全部完成) 或 "any" (任意完成)
+	Next      []string `yaml:"next,omitempty"`       // 指定下一节点列表（DAG模式）
+	DependsOn []string `yaml:"depends_on,omitempty"` // 依赖的节点列表（DAG模式）
+	JoinMode  string   `yaml:"join_mode,omitempty"`  // 汇合模式: "all" (全部完成) 或 "any" (任意完成)
 
 	// Runtime metadata (not serialized to YAML)
 	// 运行时元数据，由解析器自动填充，不序列化到 YAML
@@ -123,26 +123,26 @@ type Workflow struct {
 
 // StepResult holds the result of executing a single step.
 type StepResult struct {
-	Name        string        `json:"name"`
-	ID          string        `json:"id,omitempty"`
-	Action      string        `json:"action,omitempty"`
-	Description string        `json:"description,omitempty"`
-	Status      string        `json:"status"` // success, failed, skipped
-	Output      string        `json:"output,omitempty"`
-	Error       string        `json:"error,omitempty"`
-	Duration    string        `json:"duration,omitempty"`
-	StartTime   string        `json:"startTime,omitempty"`
-	EndTime     string        `json:"endTime,omitempty"`
-	Children    []StepResult  `json:"children,omitempty"`
+	Name        string       `json:"name"`
+	ID          string       `json:"id,omitempty"`
+	Action      string       `json:"action,omitempty"`
+	Description string       `json:"description,omitempty"`
+	Status      string       `json:"status"` // success, failed, skipped
+	Output      string       `json:"output,omitempty"`
+	Error       string       `json:"error,omitempty"`
+	Duration    string       `json:"duration,omitempty"`
+	StartTime   string       `json:"startTime,omitempty"`
+	EndTime     string       `json:"endTime,omitempty"`
+	Children    []StepResult `json:"children,omitempty"`
 	// DAG fields
-	Next       []string `json:"next,omitempty"`       // 下一节点列表（DAG模式）
-	DependsOn  []string `json:"depends_on,omitempty"` // 依赖节点列表（DAG模式）
-	JoinMode   string   `json:"join_mode,omitempty"`  // 汇合模式
+	Next      []string `json:"next,omitempty"`       // 下一节点列表（DAG模式）
+	DependsOn []string `json:"depends_on,omitempty"` // 依赖节点列表（DAG模式）
+	JoinMode  string   `json:"join_mode,omitempty"`  // 汇合模式
 	// Condition fields
-	Expression      string       `json:"expression,omitempty"`        // 条件表达式
-	ThenChildren    []StepResult `json:"then_children,omitempty"`    // then 分支子步骤
-	ElseChildren    []StepResult `json:"else_children,omitempty"`    // else 分支子步骤
-	ConditionResult *bool        `json:"condition_result"` // 条件求值结果（使用指针以支持 false 值）
+	Expression      string       `json:"expression,omitempty"`    // 条件表达式
+	ThenChildren    []StepResult `json:"then_children,omitempty"` // then 分支子步骤
+	ElseChildren    []StepResult `json:"else_children,omitempty"` // else 分支子步骤
+	ConditionResult *bool        `json:"condition_result"`        // 条件求值结果（使用指针以支持 false 值）
 	// Sleep fields
 	SleepDuration string `json:"sleepDuration,omitempty"` // Sleep 休眠时长
 	// Shell fields
@@ -157,20 +157,20 @@ type StepResult struct {
 	// SideEffecting:本步有副作用但可复现(shell/http/template 写盘)
 	Nondeterministic bool `json:"nondeterministic,omitempty"`
 	SideEffecting    bool `json:"sideEffecting,omitempty"`
-	Retries          int  `json:"retries,omitempty"`          // actual retries performed (step-level)
-	InputTokens      int  `json:"inputTokens,omitempty"`      // AI step: billed input tokens
-	OutputTokens     int  `json:"outputTokens,omitempty"`     // AI step: billed output tokens
+	Retries          int  `json:"retries,omitempty"`      // actual retries performed (step-level)
+	InputTokens      int  `json:"inputTokens,omitempty"`  // AI step: billed input tokens
+	OutputTokens     int  `json:"outputTokens,omitempty"` // AI step: billed output tokens
 }
 
 // WorkflowResult holds the result of executing a workflow.
 type WorkflowResult struct {
-	Name      string        `json:"name"`
-	Status    string        `json:"status"` // success, failed, partial
-	Steps     []StepResult  `json:"steps"`
+	Name      string            `json:"name"`
+	Status    string            `json:"status"` // success, failed, partial
+	Steps     []StepResult      `json:"steps"`
 	Variables map[string]string `json:"variables,omitempty"`
-	Error     string        `json:"error,omitempty"`
-	StartTime string        `json:"startTime,omitempty"`
-	EndTime   string        `json:"endTime,omitempty"`
+	Error     string            `json:"error,omitempty"`
+	StartTime string            `json:"startTime,omitempty"`
+	EndTime   string            `json:"endTime,omitempty"`
 	// Nondeterministic:整条 workflow 是否含非确定步骤(AI 及其下游)
 	// 由引擎传播算法推导,Phase 2 实现
 	Nondeterministic bool `json:"nondeterministic,omitempty"`

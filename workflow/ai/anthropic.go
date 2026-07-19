@@ -605,15 +605,15 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req Request, onToken fun
 // Only the fields relevant to text accumulation are modeled; extra fields are
 // ignored by json.Unmarshal.
 type streamEvent struct {
-	Type    string        `json:"type"`
-	Delta   *streamDelta  `json:"delta,omitempty"`
-	Usage   *streamUsage  `json:"usage,omitempty"`
+	Type    string         `json:"type"`
+	Delta   *streamDelta   `json:"delta,omitempty"`
+	Usage   *streamUsage   `json:"usage,omitempty"`
 	Message *streamMessage `json:"message,omitempty"`
-	Error   *streamError  `json:"error,omitempty"`
+	Error   *streamError   `json:"error,omitempty"`
 }
 
 type streamDelta struct {
-	Type       string `json:"type"`        // "text_delta"
+	Type       string `json:"type"` // "text_delta"
 	Text       string `json:"text"`
 	StopReason string `json:"stop_reason"` // present on message_delta
 }

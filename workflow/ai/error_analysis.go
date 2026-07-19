@@ -9,9 +9,9 @@ import (
 
 // ErrorDecision is the AI's recommendation for a failed step.
 type ErrorDecision struct {
-	Action string `json:"action"`           // "retry" | "skip" | "abort" | "suggest"
-	Reason string `json:"reason"`           // why this decision
-	Fix    string `json:"fix,omitempty"`    // optional fix suggestion (informational)
+	Action string `json:"action"`        // "retry" | "skip" | "abort" | "suggest"
+	Reason string `json:"reason"`        // why this decision
+	Fix    string `json:"fix,omitempty"` // optional fix suggestion (informational)
 }
 
 // AnalyzeError asks the AI to analyze a failed step and decide what to do next.

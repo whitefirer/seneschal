@@ -35,11 +35,11 @@ type OpenAIProvider struct {
 	HTTPClient *http.Client
 
 	// MaxRetries for transient errors (429/5xx). Default 3.
-	MaxRetries int
+	MaxRetries     int
 	RetryBaseDelay int // nanoseconds; 0 = 1s default
 }
 
-func (p *OpenAIProvider) Name() string { return "openai" }
+func (p *OpenAIProvider) Name() string     { return "openai" }
 func (p *OpenAIProvider) GetModel() string { return p.DefaultModel }
 
 func (p *OpenAIProvider) baseURL() string {

@@ -10,7 +10,7 @@ func TestReplay_SmartReuseDeterministic(t *testing.T) {
 	// Build a snapshot with one deterministic step (shell) and one AI step.
 	snap := ExecutionSnapshot{
 		ExecutionSummary: ExecutionSummary{ID: "exec-1"},
-		Workflow: "name: test\nsteps:\n  - name: build\n    action: shell\n    command: echo hi\n  - name: analyze\n    action: ai\n    prompt: test\n",
+		Workflow:         "name: test\nsteps:\n  - name: build\n    action: shell\n    command: echo hi\n  - name: analyze\n    action: ai\n    prompt: test\n",
 		Steps: []StepResult{
 			{Name: "build", ID: "step-build", Status: "success", Output: "hi"},
 			{Name: "analyze", ID: "step-analyze", Status: "success", Output: "AI result", Nondeterministic: true},
@@ -49,7 +49,7 @@ func TestReplay_SmartReuseDeterministic(t *testing.T) {
 func TestReplay_FullSkipsCache(t *testing.T) {
 	snap := ExecutionSnapshot{
 		ExecutionSummary: ExecutionSummary{ID: "exec-2"},
-		Workflow: "name: test\nsteps:\n  - name: build\n    action: shell\n    command: echo hi\n",
+		Workflow:         "name: test\nsteps:\n  - name: build\n    action: shell\n    command: echo hi\n",
 		Steps: []StepResult{
 			{Name: "build", ID: "step-build", Status: "success", Output: "hi"},
 		},
@@ -115,7 +115,7 @@ func TestBuildReplayCache_OnlyStepsExcludesListed(t *testing.T) {
 func TestReplay_AIWithMock(t *testing.T) {
 	snap := ExecutionSnapshot{
 		ExecutionSummary: ExecutionSummary{ID: "exec-3"},
-		Workflow: "name: test\nai:\n  model: mock\nsteps:\n  - name: ask\n    action: ai\n    prompt: hi\n    save_output: result\n",
+		Workflow:         "name: test\nai:\n  model: mock\nsteps:\n  - name: ask\n    action: ai\n    prompt: hi\n    save_output: result\n",
 		Steps: []StepResult{
 			{Name: "ask", ID: "step-ask", Status: "success", Output: "old result", Nondeterministic: true},
 		},

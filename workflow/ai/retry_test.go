@@ -28,10 +28,10 @@ func TestComplete_RetryOn429(t *testing.T) {
 	defer srv.Close()
 
 	p := &AnthropicProvider{
-		BaseURL:       srv.URL,
-		APIKey:        "test",
-		DefaultModel:  "m",
-		MaxRetries:    3,
+		BaseURL:        srv.URL,
+		APIKey:         "test",
+		DefaultModel:   "m",
+		MaxRetries:     3,
 		RetryBaseDelay: 10 * time.Millisecond, // fast for tests
 	}
 
@@ -61,10 +61,10 @@ func TestComplete_NoRetryOn400(t *testing.T) {
 	defer srv.Close()
 
 	p := &AnthropicProvider{
-		BaseURL:       srv.URL,
-		APIKey:        "test",
-		DefaultModel:  "m",
-		MaxRetries:    3,
+		BaseURL:        srv.URL,
+		APIKey:         "test",
+		DefaultModel:   "m",
+		MaxRetries:     3,
 		RetryBaseDelay: 10 * time.Millisecond,
 	}
 
@@ -87,10 +87,10 @@ func TestComplete_RetryExhausted(t *testing.T) {
 	defer srv.Close()
 
 	p := &AnthropicProvider{
-		BaseURL:       srv.URL,
-		APIKey:        "test",
-		DefaultModel:  "m",
-		MaxRetries:    2,
+		BaseURL:        srv.URL,
+		APIKey:         "test",
+		DefaultModel:   "m",
+		MaxRetries:     2,
 		RetryBaseDelay: 10 * time.Millisecond,
 	}
 

@@ -3,16 +3,16 @@ package workflow
 // ExecutionSummary is the metadata for a past execution, used in listings
 // without the full step tree.
 type ExecutionSummary struct {
-	ID             string `json:"id"`
-	WorkflowName   string `json:"workflowName"`
-	WorkflowFile   string `json:"workflowFile,omitempty"`
-	Status         string `json:"status"`
-	StartTime      string `json:"startTime"`
-	EndTime        string `json:"endTime,omitempty"`
-	Duration       string `json:"duration,omitempty"`
-	Error          string `json:"error,omitempty"`
-	StepsCount     int    `json:"stepsCount"`
-	Nondeterministic bool  `json:"nondeterministic,omitempty"`
+	ID               string `json:"id"`
+	WorkflowName     string `json:"workflowName"`
+	WorkflowFile     string `json:"workflowFile,omitempty"`
+	Status           string `json:"status"`
+	StartTime        string `json:"startTime"`
+	EndTime          string `json:"endTime,omitempty"`
+	Duration         string `json:"duration,omitempty"`
+	Error            string `json:"error,omitempty"`
+	StepsCount       int    `json:"stepsCount"`
+	Nondeterministic bool   `json:"nondeterministic,omitempty"`
 }
 
 // ExecutionSnapshot is the complete, persistable record of one workflow run:
@@ -25,9 +25,9 @@ type ExecutionSummary struct {
 // stored in a directory that is not committed.
 type ExecutionSnapshot struct {
 	ExecutionSummary
-	Steps     []StepResult       `json:"steps"`
-	Variables map[string]string  `json:"variables,omitempty"`
-	Workflow  string             `json:"workflow"` // original YAML source
+	Steps     []StepResult      `json:"steps"`
+	Variables map[string]string `json:"variables,omitempty"`
+	Workflow  string            `json:"workflow"` // original YAML source
 }
 
 // ExecutionStore persists execution history. Implementations must be safe for

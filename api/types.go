@@ -39,32 +39,32 @@ type RunRequest struct {
 
 // ChatRequest is the body for POST /api/chat.
 type ChatRequest struct {
-	Message string         `json:"message"`           // user's natural-language intent
-	Dir     string         `json:"dir,omitempty"`      // workflow directory
-	History []ChatMessage  `json:"history,omitempty"`  // prior conversation turns
+	Message string        `json:"message"`           // user's natural-language intent
+	Dir     string        `json:"dir,omitempty"`     // workflow directory
+	History []ChatMessage `json:"history,omitempty"` // prior conversation turns
 }
 
 // ChatMessage is one turn of conversation history sent from the frontend.
 type ChatMessage struct {
-	Role    string `json:"role"`    // "user" or "assistant"
+	Role    string `json:"role"` // "user" or "assistant"
 	Content string `json:"content"`
 }
 
 type ExecutionRecord struct {
-	ID           string    `json:"id"`
-	WorkflowName string    `json:"workflowName"`
-	WorkflowFile string    `json:"workflowFile"`
-	Status       string    `json:"status"`
-	StartTime    string    `json:"startTime"`
-	EndTime      string    `json:"endTime"`
-	Duration     string    `json:"duration"`
-	Error        string    `json:"error,omitempty"`
-	StepsCount   int       `json:"stepsCount"`
+	ID           string `json:"id"`
+	WorkflowName string `json:"workflowName"`
+	WorkflowFile string `json:"workflowFile"`
+	Status       string `json:"status"`
+	StartTime    string `json:"startTime"`
+	EndTime      string `json:"endTime"`
+	Duration     string `json:"duration"`
+	Error        string `json:"error,omitempty"`
+	StepsCount   int    `json:"stepsCount"`
 }
 
 type ExecutionDetail struct {
 	ExecutionRecord
-	Logs     []LogEntry   `json:"logs"`
+	Logs     []LogEntry            `json:"logs"`
 	Steps    []workflow.StepResult `json:"steps"`
 	Workflow string                `json:"workflow"`
 }
@@ -80,9 +80,9 @@ type LogEntry struct {
 // WebSocket message types
 
 type WSMessage struct {
-	Type   string                 `json:"type"`
-	Data   map[string]interface{} `json:"data,omitempty"`
-	Error  string                 `json:"error,omitempty"`
+	Type  string                 `json:"type"`
+	Data  map[string]interface{} `json:"data,omitempty"`
+	Error string                 `json:"error,omitempty"`
 }
 
 type WSProgressEvent struct {
@@ -99,8 +99,8 @@ type WSProgressEvent struct {
 	Duration     string `json:"duration,omitempty"`
 	Timestamp    string `json:"timestamp"`
 	// 格式化的日志消息，前端直接使用
-	LogMessage   string `json:"logMessage,omitempty"`
-	LogLevel     string `json:"logLevel,omitempty"`
+	LogMessage string `json:"logMessage,omitempty"`
+	LogLevel   string `json:"logLevel,omitempty"`
 	// Condition 特有字段
 	ConditionResult *bool `json:"conditionResult,omitempty"` // 条件求值结果
 }

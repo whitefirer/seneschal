@@ -4,15 +4,15 @@ import "github.com/charmbracelet/lipgloss"
 
 // Theme 定义颜色主题
 type Theme struct {
-	Name        string
-	Primary     lipgloss.Color
-	Secondary   lipgloss.Color
-	Success     lipgloss.Color
-	Error       lipgloss.Color
-	Warning     lipgloss.Color
-	Info        lipgloss.Color
-	Gray        lipgloss.Color
-	Border      lipgloss.Color
+	Name      string
+	Primary   lipgloss.Color
+	Secondary lipgloss.Color
+	Success   lipgloss.Color
+	Error     lipgloss.Color
+	Warning   lipgloss.Color
+	Info      lipgloss.Color
+	Gray      lipgloss.Color
+	Border    lipgloss.Color
 }
 
 // 预定义主题
@@ -20,16 +20,16 @@ var (
 	// ThemeDefault Claude Code style — warm amber palette
 	ThemeDefault = Theme{
 		Name:      "Default",
-		Primary:   lipgloss.Color("214"),  // warm amber
-		Secondary: lipgloss.Color("243"),  // muted gray
-		Success:   lipgloss.Color("78"),   // soft green
-		Error:     lipgloss.Color("203"),  // warm red
-		Warning:   lipgloss.Color("221"),  // soft yellow
-		Info:      lipgloss.Color("117"),  // soft blue
-		Gray:      lipgloss.Color("243"),  // muted gray
-		Border:    lipgloss.Color("214"),  // amber border
+		Primary:   lipgloss.Color("214"), // warm amber
+		Secondary: lipgloss.Color("243"), // muted gray
+		Success:   lipgloss.Color("78"),  // soft green
+		Error:     lipgloss.Color("203"), // warm red
+		Warning:   lipgloss.Color("221"), // soft yellow
+		Info:      lipgloss.Color("117"), // soft blue
+		Gray:      lipgloss.Color("243"), // muted gray
+		Border:    lipgloss.Color("214"), // amber border
 	}
-	
+
 	// ThemeDark 暗黑主题（紫色系）
 	ThemeDark = Theme{
 		Name:      "Dark",
@@ -42,7 +42,7 @@ var (
 		Gray:      lipgloss.Color("241"),
 		Border:    lipgloss.Color("129"),
 	}
-	
+
 	// ThemeLight 明亮主题（绿色系）
 	ThemeLight = Theme{
 		Name:      "Light",
@@ -55,7 +55,7 @@ var (
 		Gray:      lipgloss.Color("236"),
 		Border:    lipgloss.Color("22"),
 	}
-	
+
 	// ThemeMonokai Monokai 主题
 	ThemeMonokai = Theme{
 		Name:      "Monokai",
@@ -68,7 +68,7 @@ var (
 		Gray:      lipgloss.Color("242"),
 		Border:    lipgloss.Color("197"),
 	}
-	
+
 	// ThemeOcean 海洋主题
 	ThemeOcean = Theme{
 		Name:      "Ocean",

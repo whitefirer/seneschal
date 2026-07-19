@@ -56,11 +56,11 @@ type ToolExecutor interface {
 
 // AgentEvent is one step in the agent loop, sent to the caller via onEvent.
 type AgentEvent struct {
-	Type    string `json:"type"`              // thinking, tool_call, tool_result, text, done, error
-	Tool    string `json:"tool,omitempty"`    // tool name (for tool_call/tool_result)
-	Input   string `json:"input,omitempty"`   // tool input JSON (for tool_call)
-	Output  string `json:"output,omitempty"`  // tool output or text content
-	Error   string `json:"error,omitempty"`   // error message
+	Type   string `json:"type"`             // thinking, tool_call, tool_result, text, done, error
+	Tool   string `json:"tool,omitempty"`   // tool name (for tool_call/tool_result)
+	Input  string `json:"input,omitempty"`  // tool input JSON (for tool_call)
+	Output string `json:"output,omitempty"` // tool output or text content
+	Error  string `json:"error,omitempty"`  // error message
 }
 
 func jsonRaw(s string) json.RawMessage { return json.RawMessage(s) }

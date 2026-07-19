@@ -56,7 +56,7 @@ type ollamaChatRequest struct {
 }
 
 type ollamaMessage struct {
-	Role    string `json:"role"`    // "system", "user", "assistant"
+	Role    string `json:"role"` // "system", "user", "assistant"
 	Content string `json:"content"`
 }
 
@@ -67,10 +67,10 @@ type ollamaOptions struct {
 
 // ollamaChatResponse is the non-streaming response (stream:false).
 type ollamaChatResponse struct {
-	Model    string        `json:"model"`
-	Message  ollamaMessage `json:"message"`
-	Done     bool          `json:"done"`
-	DoneReason string      `json:"done_reason,omitempty"`
+	Model      string        `json:"model"`
+	Message    ollamaMessage `json:"message"`
+	Done       bool          `json:"done"`
+	DoneReason string        `json:"done_reason,omitempty"`
 	// Usage fields (present when done=true in streaming; in non-streaming
 	// they're at the top level).
 	PromptEvalCount int `json:"prompt_eval_count,omitempty"`
@@ -79,12 +79,12 @@ type ollamaChatResponse struct {
 
 // ollamaStreamChunk is one NDJSON line in a streaming response.
 type ollamaStreamChunk struct {
-	Model    string        `json:"model"`
-	Message  ollamaMessage `json:"message"`
-	Done     bool          `json:"done"`
-	DoneReason string      `json:"done_reason,omitempty"`
-	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
-	EvalCount       int    `json:"eval_count,omitempty"`
+	Model           string        `json:"model"`
+	Message         ollamaMessage `json:"message"`
+	Done            bool          `json:"done"`
+	DoneReason      string        `json:"done_reason,omitempty"`
+	PromptEvalCount int           `json:"prompt_eval_count,omitempty"`
+	EvalCount       int           `json:"eval_count,omitempty"`
 }
 
 // Complete sends a non-streaming chat request.

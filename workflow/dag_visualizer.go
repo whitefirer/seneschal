@@ -7,8 +7,8 @@ import (
 
 // DAGVisualizer DAG 图可视化器
 type DAGVisualizer struct {
-	color   bool
-	style   *ThemeStyle
+	color    bool
+	style    *ThemeStyle
 	rendered map[string]bool // 已渲染节点集合
 }
 
