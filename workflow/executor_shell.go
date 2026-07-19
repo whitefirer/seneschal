@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ func (e *Executor) execShell(step Step) (string, error) {
 	if command == "" {
 		command = step.Shell
 	}
-	
+
 	command, err := e.context.ResolveTemplate(command)
 	if err != nil {
 		return "", fmt.Errorf("resolve command template: %w", err)
@@ -43,7 +42,9 @@ func (e *Executor) execShell(step Step) (string, error) {
 		e.printer.PrintShellCommand(command)
 	}
 
-	cmd := exec.CommandContext(context.Background(), shell, args...)
+	// Derived from the execution context so a canceled run (e.g. TUI quit)
+	// kills the process instead of leaking it.
+	cmd := exec.CommandContext(e.executionContext(), shell, args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -145,4 +146,3 @@ func (e *Executor) getShell(shell string) (string, []string) {
 	}
 	return "sh", []string{"-c"}
 }
-

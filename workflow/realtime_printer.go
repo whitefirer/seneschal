@@ -116,7 +116,7 @@ type model struct {
 	termW int
 	termH int
 
-	result              *WorkflowResult
+	result             *WorkflowResult
 	startTime, endTime string
 
 	events chan ProgressEvent
@@ -126,14 +126,17 @@ type model struct {
 // ── RealtimePrinter ─────────────────────────────────────────────────────────
 
 type RealtimePrinter struct {
-	EventCh chan ProgressEvent
-	store   *stateStore
-	sty     *ThemeStyle
+	EventCh  chan ProgressEvent
+	store    *stateStore
+	sty      *ThemeStyle
 	tuiStyle string
-	stopCh  chan struct{}
-	result  *WorkflowResult
-	sTime   string
-	eTime   string
+	stopCh   chan struct{}
+	// mu guards result/sTime/eTime: Stop is called from the workflow
+	// goroutine while Run reads them on the TUI goroutine.
+	mu     sync.Mutex
+	result *WorkflowResult
+	sTime  string
+	eTime  string
 }
 
 func NewRealtimePrinter(theme Theme, tuiStyle string) *RealtimePrinter {
@@ -154,30 +157,44 @@ func (p *RealtimePrinter) SetEventChannel(ch chan ProgressEvent) {
 
 // Run starts the bubbletea TUI on the current goroutine. It blocks until the user quits.
 func (p *RealtimePrinter) Run() {
+	res, sTime, eTime := p.resultSnapshot()
 	m := &model{
-		store:    p.store,
-		sty:      p.sty,
-		tuiStyle: p.tuiStyle,
-		events:   p.EventCh,
-		stopCh:   p.stopCh,
-		termW:    80,
-		termH:    24,
-		result:   p.result,
-		startTime: p.sTime,
-		endTime:   p.eTime,
+		store:     p.store,
+		sty:       p.sty,
+		tuiStyle:  p.tuiStyle,
+		events:    p.EventCh,
+		stopCh:    p.stopCh,
+		termW:     80,
+		termH:     24,
+		result:    res,
+		startTime: sTime,
+		endTime:   eTime,
 	}
 	prog := tea.NewProgram(m)
 	if _, err := prog.Run(); err != nil {
-		printFinalResult(p.sty, p.tuiStyle, p.result, p.sTime, p.eTime)
+		res, sTime, eTime = p.resultSnapshot()
+		if res != nil {
+			printFinalResult(p.sty, p.tuiStyle, res, sTime, eTime)
+		}
 	}
 }
 
 // Stop signals the TUI that the workflow is done and stores result data.
 func (p *RealtimePrinter) Stop(result *WorkflowResult, startTime, endTime string) {
+	p.mu.Lock()
 	p.result = result
 	p.sTime = startTime
 	p.eTime = endTime
+	p.mu.Unlock()
 	close(p.stopCh)
+}
+
+// resultSnapshot returns the stored result data under the lock (Stop runs on
+// the workflow goroutine, Run on the TUI goroutine).
+func (p *RealtimePrinter) resultSnapshot() (*WorkflowResult, string, string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.result, p.sTime, p.eTime
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────
@@ -265,14 +282,20 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.moveCursor(1)
 	case "pgup":
 		m.scroll -= 10
-		if m.scroll < 0 { m.scroll = 0 }
+		if m.scroll < 0 {
+			m.scroll = 0
+		}
 	case "pgdown":
 		steps := m.store.all()
 		vis := m.visibleLines()
 		m.scroll += 10
 		maxScroll := len(steps) - vis
-		if maxScroll < 0 { maxScroll = 0 }
-		if m.scroll > maxScroll { m.scroll = maxScroll }
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.scroll > maxScroll {
+			m.scroll = maxScroll
+		}
 	case "g":
 		m.scroll = 0
 		m.cursor = 0
@@ -280,8 +303,12 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		steps := m.store.all()
 		vis := m.visibleLines()
 		m.scroll = len(steps) - vis
-		if m.scroll < 0 { m.scroll = 0 }
-		if len(steps) > 0 { m.cursor = len(steps) - 1 }
+		if m.scroll < 0 {
+			m.scroll = 0
+		}
+		if len(steps) > 0 {
+			m.cursor = len(steps) - 1
+		}
 	case "enter":
 		m.toggleDetail()
 	}
@@ -291,8 +318,12 @@ func (m *model) handleKey(msg tea.KeyMsg) tea.Cmd {
 func (m *model) moveCursor(delta int) {
 	steps := m.store.all()
 	newCur := m.cursor + delta
-	if newCur < 0 { newCur = 0 }
-	if newCur >= len(steps) { newCur = len(steps) - 1 }
+	if newCur < 0 {
+		newCur = 0
+	}
+	if newCur >= len(steps) {
+		newCur = len(steps) - 1
+	}
 	m.cursor = newCur
 	vis := m.visibleLines()
 	if m.cursor < m.scroll {
@@ -304,7 +335,9 @@ func (m *model) moveCursor(delta int) {
 
 func (m *model) toggleDetail() {
 	steps := m.store.all()
-	if m.cursor >= len(steps) { return }
+	if m.cursor >= len(steps) {
+		return
+	}
 	s := steps[m.cursor]
 	if m.detail && m.selId == s.stepId {
 		m.detail = false
@@ -320,13 +353,19 @@ func (m *model) toggleDetail() {
 func (m *model) visibleLines() int {
 	h := 3 + 2
 	avail := m.termH - h
-	if avail < 1 { avail = 1 }
+	if avail < 1 {
+		avail = 1
+	}
 	return avail
 }
 
 func (m *model) View() string {
-	if m.termW < 20 { m.termW = 80 }
-	if m.termH < 8 { m.termH = 24 }
+	if m.termW < 20 {
+		m.termW = 80
+	}
+	if m.termH < 8 {
+		m.termH = 24
+	}
 
 	if m.quitting {
 		return m.finalView()
@@ -348,7 +387,7 @@ func (m *model) listView() string {
 	contentW := inner - 2
 
 	if m.tuiStyle == "hermes" {
-		b.WriteString(prim.Render("╭" + strings.Repeat("─", inner) + "╮") + "\n")
+		b.WriteString(prim.Render("╭"+strings.Repeat("─", inner)+"╮") + "\n")
 	} else {
 		b.WriteString(prim.Render(strings.Repeat("━", w)) + "\n")
 	}
@@ -361,7 +400,7 @@ func (m *model) listView() string {
 	}
 
 	if m.tuiStyle == "hermes" {
-		b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
+		b.WriteString(prim.Render("├"+strings.Repeat("─", inner)+"┤") + "\n")
 	} else {
 		b.WriteString(prim.Render(strings.Repeat("━", w)) + "\n")
 	}
@@ -369,9 +408,15 @@ func (m *model) listView() string {
 	steps := m.store.all()
 	vis := m.visibleLines()
 	maxScroll := len(steps) - vis
-	if maxScroll < 0 { maxScroll = 0 }
-	if m.scroll > maxScroll { m.scroll = maxScroll }
-	if m.scroll < 0 { m.scroll = 0 }
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.scroll > maxScroll {
+		m.scroll = maxScroll
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
 
 	children := map[string][]stepRec{}
 	for i := range steps {
@@ -386,9 +431,12 @@ func (m *model) listView() string {
 		if s.depth == 0 {
 			parentTotal++
 			switch s.status {
-			case "completed", "success", "done": doneC++
-			case "failed": failC++
-			case "running": runC++
+			case "completed", "success", "done":
+				doneC++
+			case "failed":
+				failC++
+			case "running":
+				runC++
 			}
 		}
 	}
@@ -400,7 +448,11 @@ func (m *model) listView() string {
 		if kids, ok := children[s.stepId]; ok && s.depth == 0 {
 			okc, badc := 0, 0
 			for _, k := range kids {
-				if k.status == "failed" { badc++ } else if k.status != "running" { okc++ }
+				if k.status == "failed" {
+					badc++
+				} else if k.status != "running" {
+					okc++
+				}
 			}
 			childStats = fmt.Sprintf("%d/%d", okc+badc, len(kids))
 		}
@@ -422,7 +474,7 @@ func (m *model) listView() string {
 	}
 
 	if m.tuiStyle == "hermes" {
-		b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
+		b.WriteString(prim.Render("├"+strings.Repeat("─", inner)+"┤") + "\n")
 	} else {
 		b.WriteString(prim.Render(strings.Repeat("━", w)) + "\n")
 	}
@@ -441,7 +493,9 @@ func (m *model) listView() string {
 	pct := 0
 	if parentTotal > 0 {
 		pct = int(float64(doneC+failC) / float64(parentTotal) * 100)
-		if pct > 100 { pct = 100 }
+		if pct > 100 {
+			pct = 100
+		}
 	}
 	bw := 16
 	filled := pct * bw / 100
@@ -464,9 +518,11 @@ func (m *model) listView() string {
 	hint := " ↑↓:scroll  Enter:detail  q:quit"
 	if m.tuiStyle == "hermes" {
 		statsPad := contentW - len([]rune(stats+hint))
-		if statsPad < 0 { statsPad = 0 }
+		if statsPad < 0 {
+			statsPad = 0
+		}
 		b.WriteString("│ " + stats + strings.Repeat(" ", statsPad) + hint + " │\n")
-		b.WriteString(prim.Render("╰" + strings.Repeat("─", inner) + "╯") + "\n")
+		b.WriteString(prim.Render("╰"+strings.Repeat("─", inner)+"╯") + "\n")
 	} else {
 		b.WriteString("  " + stats + "  " + gray.Render(hint) + "\n")
 		b.WriteString(prim.Render(strings.Repeat("━", w)) + "\n")
@@ -494,13 +550,15 @@ func (m *model) detailView() string {
 	contentW := inner - 4
 
 	// Header
-	b.WriteString(prim.Render("╭" + strings.Repeat("─", inner) + "╮") + "\n")
+	b.WriteString(prim.Render("╭"+strings.Repeat("─", inner)+"╮") + "\n")
 	header := prim.Bold(true).Render(" " + actionIconTUI(s.action, m.sty) + " " + s.name)
 	escHint := m.sty.Gray().Render("Esc to go back")
 	spacer := inner - termWidth(header) - termWidth(escHint) - 2
-	if spacer < 0 { spacer = 0 }
+	if spacer < 0 {
+		spacer = 0
+	}
 	b.WriteString("│" + header + strings.Repeat(" ", spacer) + "  " + escHint + "│\n")
-	b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
+	b.WriteString(prim.Render("├"+strings.Repeat("─", inner)+"┤") + "\n")
 
 	// Metadata
 	b.WriteString("│  " + m.sty.Gray().Render("Action:") + "    " + m.sty.Gray().Render(fmt.Sprintf("%-20s", s.action)) + strings.Repeat(" ", contentW-30) + "│\n")
@@ -509,16 +567,20 @@ func (m *model) detailView() string {
 		statusLine += "  " + m.sty.Gray().Render("Duration:") + " " + m.sty.Info().Render(s.dur)
 	}
 	statusPad := inner - termWidth(statusLine) + 2 // +2 for "│ "
-	if statusPad < 0 { statusPad = 0 }
+	if statusPad < 0 {
+		statusPad = 0
+	}
 	statusLine += strings.Repeat(" ", statusPad) + "│\n"
 	b.WriteString(statusLine)
 
 	// Divider
-	b.WriteString(prim.Render("├" + strings.Repeat("─", inner) + "┤") + "\n")
+	b.WriteString(prim.Render("├"+strings.Repeat("─", inner)+"┤") + "\n")
 
 	// Output section
 	bodyH := m.termH - 6 // header + meta + divider + footer
-	if bodyH < 3 { bodyH = 3 }
+	if bodyH < 3 {
+		bodyH = 3
+	}
 
 	output := s.output
 	if output == "" {
@@ -530,7 +592,9 @@ func (m *model) detailView() string {
 	showLines := lines
 	if len(lines) > bodyH {
 		start := len(lines) - bodyH
-		if start < 0 { start = 0 }
+		if start < 0 {
+			start = 0
+		}
 		showLines = lines[start:]
 	}
 
@@ -544,7 +608,9 @@ func (m *model) detailView() string {
 			trimmed += "..."
 		}
 		pad := contentW - termWidth(trimmed)
-		if pad < 0 { pad = 0 }
+		if pad < 0 {
+			pad = 0
+		}
 		b.WriteString("│  " + m.sty.Gray().Render(trimmed) + strings.Repeat(" ", pad) + " │\n")
 	}
 
@@ -555,7 +621,7 @@ func (m *model) detailView() string {
 	}
 
 	// Footer
-	b.WriteString(prim.Render("╰" + strings.Repeat("─", inner) + "╯") + "\n")
+	b.WriteString(prim.Render("╰"+strings.Repeat("─", inner)+"╯") + "\n")
 
 	return b.String()
 }
@@ -569,7 +635,11 @@ func (m *model) finalView() string {
 
 	ok, bad := 0, 0
 	for _, s := range m.result.Steps {
-		if s.Status == "failed" { bad++ } else { ok++ }
+		if s.Status == "failed" {
+			bad++
+		} else {
+			ok++
+		}
 	}
 
 	statusStyle := m.sty.Success()
@@ -606,7 +676,9 @@ func (m *model) finalView() string {
 func (m *model) stepLine(s stepRec, childStats string, sel bool, fullW int) string {
 	indent := strings.Repeat("  ", s.depth)
 	nameW := 26 - s.depth*2
-	if nameW < 3 { nameW = 3 }
+	if nameW < 3 {
+		nameW = 3
+	}
 
 	icon := m.sty.Gray().Render("○")
 	switch s.status {
@@ -632,7 +704,9 @@ func (m *model) stepLine(s stepRec, childStats string, sel bool, fullW int) stri
 	line := fmt.Sprintf("%s%s %s %s %s%s", indent, icon, actIcon, nm, tag, dur)
 	// Pad to full width, then highlight if selected
 	pad := fullW - termWidth(line)
-	if pad < 0 { pad = 0 }
+	if pad < 0 {
+		pad = 0
+	}
 	line += strings.Repeat(" ", pad)
 	if sel {
 		line = lipgloss.NewStyle().Background(lipgloss.Color("236")).Render(line)
@@ -643,13 +717,18 @@ func (m *model) stepLine(s stepRec, childStats string, sel bool, fullW int) stri
 func (m *model) shortStepLine(s stepRec, sel bool) string {
 	indent := strings.Repeat("  ", s.depth)
 	nameW := 22 - s.depth*2
-	if nameW < 3 { nameW = 3 }
+	if nameW < 3 {
+		nameW = 3
+	}
 
 	icon := "○"
 	switch s.status {
-	case "completed", "success", "done": icon = "✓"
-	case "failed": icon = "✗"
-	case "running": icon = spin[m.frame]
+	case "completed", "success", "done":
+		icon = "✓"
+	case "failed":
+		icon = "✗"
+	case "running":
+		icon = spin[m.frame]
 	}
 
 	line := fmt.Sprintf("%s%s %s", indent, icon, truncS(s.name, nameW))
@@ -670,29 +749,44 @@ func hermesLine(content string, width int, style string) string {
 
 func actionIconTUI(act string, sty *ThemeStyle) string {
 	switch act {
-	case "shell": return sty.Info().Render("◇")
-	case "http": return sty.Info().Render("○")
-	case "log": return sty.Gray().Render("◆")
-	case "sleep": return sty.Gray().Render("◌")
-	case "condition": return sty.Warning().Render("◇")
-	case "set": return sty.Gray().Render("◦")
-	case "parallel": return sty.Info().Render("◎")
-	case "foreach", "loop": return sty.Info().Render("◈")
+	case "shell":
+		return sty.Info().Render("◇")
+	case "http":
+		return sty.Info().Render("○")
+	case "log":
+		return sty.Gray().Render("◆")
+	case "sleep":
+		return sty.Gray().Render("◌")
+	case "condition":
+		return sty.Warning().Render("◇")
+	case "set":
+		return sty.Gray().Render("◦")
+	case "parallel":
+		return sty.Info().Render("◎")
+	case "foreach", "loop":
+		return sty.Info().Render("◈")
 	}
 	return sty.Gray().Render("◦")
 }
 
 func truncS(s string, n int) string {
-	if n < 3 { n = 3 }
-	if len(s) <= n { return s }
+	if n < 3 {
+		n = 3
+	}
+	if len(s) <= n {
+		return s
+	}
 	return s[:n-1] + "…"
 }
 
 func statusRender(st string, sty *ThemeStyle) string {
 	switch st {
-	case "completed", "success", "done": return sty.Success().Render(st)
-	case "failed": return sty.Error().Render(st)
-	case "running": return sty.Warning().Render(st)
+	case "completed", "success", "done":
+		return sty.Success().Render(st)
+	case "failed":
+		return sty.Error().Render(st)
+	case "running":
+		return sty.Warning().Render(st)
 	}
 	return sty.Gray().Render(st)
 }
@@ -702,8 +796,16 @@ func stripAnsi(s string) string {
 	b.Grow(len(s))
 	skip := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\033' { skip = true; continue }
-		if skip { if s[i] == 'm' { skip = false }; continue }
+		if s[i] == '\033' {
+			skip = true
+			continue
+		}
+		if skip {
+			if s[i] == 'm' {
+				skip = false
+			}
+			continue
+		}
 		b.WriteByte(s[i])
 	}
 	return b.String()
@@ -716,7 +818,11 @@ func termWidth(s string) int {
 func printFinalResult(sty *ThemeStyle, tuiStyle string, result *WorkflowResult, startTime, endTime string) {
 	ok, bad := 0, 0
 	for _, s := range result.Steps {
-		if s.Status == "failed" { bad++ } else { ok++ }
+		if s.Status == "failed" {
+			bad++
+		} else {
+			ok++
+		}
 	}
 	st, _ := time.Parse(time.RFC3339, startTime)
 	et, _ := time.Parse(time.RFC3339, endTime)
@@ -742,7 +848,9 @@ func printFinalResult(sty *ThemeStyle, tuiStyle string, result *WorkflowResult, 
 	}
 
 	if tuiStyle == "claude" {
-		for _, l := range lines { fmt.Println(l) }
+		for _, l := range lines {
+			fmt.Println(l)
+		}
 	} else {
 		fmt.Println(sty.BoxStyle().Render(strings.Join(lines, "\n")))
 	}

@@ -23,18 +23,18 @@ const (
 // TriggerConfig is one trigger declaration in a runbook.
 type TriggerConfig struct {
 	Type TriggerType `yaml:"type"`
-	Cron string      `yaml:"cron,omitempty"`     // for type: cron — cron expression (simplified: "*/N * * * *" or "M H * * *")
-	Path string      `yaml:"path,omitempty"`     // for type: webhook — URL path suffix
+	Cron string      `yaml:"cron,omitempty"` // for type: cron — cron expression (simplified: "*/N * * * *" or "M H * * *")
+	Path string      `yaml:"path,omitempty"` // for type: webhook — URL path suffix
 }
 
 // RunbookConfig is a complete runbook definition loaded from YAML.
 type RunbookConfig struct {
 	Name      string            `yaml:"name"`
-	Workflow  string            `yaml:"workflow"`             // path to the workflow YAML (relative to runbooks/ or workflows/ dir)
+	Workflow  string            `yaml:"workflow"` // path to the workflow YAML (relative to runbooks/ or workflows/ dir)
 	Triggers  []TriggerConfig   `yaml:"triggers"`
 	Variables map[string]string `yaml:"variables,omitempty"`
-	FileName  string            `yaml:"-"`                    // set by loader
- FilePath string             `yaml:"-"`                    // absolute path
+	FileName  string            `yaml:"-"` // set by loader
+	FilePath  string            `yaml:"-"` // absolute path
 }
 
 // TriggerFunc is the callback invoked when a runbook is triggered.
@@ -43,13 +43,13 @@ type TriggerFunc func(rb *RunbookConfig, extraVars map[string]string)
 
 // RunbookManager loads, watches, and dispatches runbooks.
 type RunbookManager struct {
-	mu        sync.RWMutex
-	runbooks  map[string]*RunbookConfig // keyed by name
-	dir       string
-	workflowsDir string                 // for resolving relative workflow paths
-	trigger   TriggerFunc               // callback when a runbook fires
-	cronStop  map[string]chan struct{}  // cron stop channels keyed by "name#index"
-	logFunc   func(format string, args ...interface{})
+	mu           sync.RWMutex
+	runbooks     map[string]*RunbookConfig // keyed by name
+	dir          string
+	workflowsDir string                   // for resolving relative workflow paths
+	trigger      TriggerFunc              // callback when a runbook fires
+	cronStop     map[string]chan struct{} // cron stop channels keyed by "name#index"
+	logFunc      func(format string, args ...interface{})
 }
 
 // NewRunbookManager creates a manager. trigger is called when a runbook fires
@@ -59,12 +59,12 @@ func NewRunbookManager(dir, workflowsDir string, trigger TriggerFunc, logFunc fu
 		logFunc = func(string, ...interface{}) {}
 	}
 	return &RunbookManager{
-		runbooks:    make(map[string]*RunbookConfig),
-		dir:         dir,
+		runbooks:     make(map[string]*RunbookConfig),
+		dir:          dir,
 		workflowsDir: workflowsDir,
-		trigger:     trigger,
-		cronStop:    make(map[string]chan struct{}),
-		logFunc:     logFunc,
+		trigger:      trigger,
+		cronStop:     make(map[string]chan struct{}),
+		logFunc:      logFunc,
 	}
 }
 
@@ -301,9 +301,11 @@ func fileExists(path string) bool {
 
 // parseSimpleCron converts a simplified cron expression to a Duration.
 // Supports:
-//   "*/N * * * *" → every N minutes
-//   "M H * * *"   → daily at H:M (best-effort, computes next run)
-//   "Ns" / "Nm"   → Go duration (shortcut)
+//
+//	"*/N * * * *" → every N minutes
+//	"M H * * *"   → daily at H:M (best-effort, computes next run)
+//	"Ns" / "Nm"   → Go duration (shortcut)
+//
 // Returns 0 if unparseable.
 func parseSimpleCron(cron string) time.Duration {
 	cron = strings.TrimSpace(cron)

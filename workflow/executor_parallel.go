@@ -21,12 +21,12 @@ func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult, pa
 	}
 
 	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		outputs  []string
-		hasError bool
-		firstErr error
-		children []StepResult
+		wg           sync.WaitGroup
+		mu           sync.Mutex
+		outputs      []string
+		hasError     bool
+		firstErr     error
+		children     []StepResult
 		successCount int
 		failedCount  int
 	)
@@ -41,16 +41,16 @@ func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult, pa
 				childID = fmt.Sprintf("%s-child-%d", stepID, i)
 			}
 		}
-		
+
 		wg.Add(1)
 		go func(s Step, childID string) {
 			defer wg.Done()
-			
+
 			// Note: step_start, step_output, step_complete are all sent by executeStep()
 			// Don't send again to avoid duplicate output
-			
+
 			childResult := e.executeStep(s, depth+1, result, parentID)
-			
+
 			mu.Lock()
 			defer mu.Unlock()
 			if childResult.Output != "" {
@@ -73,7 +73,7 @@ func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult, pa
 
 	// Add summary output for parallel
 	summaryOutput := fmt.Sprintf("并行完成: %d个任务, %d成功, %d失败", len(step.Steps), successCount, failedCount)
-	
+
 	if hasError && firstErr != nil {
 		if len(outputs) > 0 {
 			return summaryOutput + "\n" + strings.Join(outputs, "\n"), children, firstErr
@@ -85,4 +85,3 @@ func (e *Executor) execParallel(step Step, depth int, result *WorkflowResult, pa
 	}
 	return summaryOutput, children, nil
 }
-

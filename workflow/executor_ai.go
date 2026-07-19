@@ -96,29 +96,27 @@ func injectInputs(prompt string, inputs map[string]string) string {
 // tokens and emits ai_token events for incremental display; otherwise it
 // completes non-streaming and returns the full text. The generated text is
 // stored via step.SaveOutput (if set) and returned as the step output.
-func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) (string, error) {
+func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) (output string, inputTokens, outputTokens int, err error) {
 	if e.aiProvider == nil {
-		return "", fmt.Errorf("ai step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
+		return "", 0, 0, fmt.Errorf("ai step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
 	}
 
 	// Budget check: skip if cumulative usage already exceeds the workflow budget.
-	if e.aiBudget > 0 && e.cumulativeTokens >= e.aiBudget {
-		e.lastAIInputTokens = 0
-		e.lastAIOutputTokens = 0
-		return "(skipped: token budget exceeded)", nil
+	if e.aiBudget > 0 && e.cumulativeAITokens() >= e.aiBudget {
+		return "(skipped: token budget exceeded)", 0, 0, nil
 	}
 
 	prompt, err := e.context.ResolveTemplate(step.Prompt)
 	if err != nil {
-		return "", fmt.Errorf("ai step '%s': resolve prompt template: %w", step.Name, err)
+		return "", 0, 0, fmt.Errorf("ai step '%s': resolve prompt template: %w", step.Name, err)
 	}
 	if strings.TrimSpace(prompt) == "" {
-		return "", fmt.Errorf("ai step '%s': prompt is empty", step.Name)
+		return "", 0, 0, fmt.Errorf("ai step '%s': prompt is empty", step.Name)
 	}
 
 	system, err := e.context.ResolveTemplate(step.System)
 	if err != nil {
-		return "", fmt.Errorf("ai step '%s': resolve system template: %w", step.Name, err)
+		return "", 0, 0, fmt.Errorf("ai step '%s': resolve system template: %w", step.Name, err)
 	}
 
 	// Model: step-level override takes priority over the workflow-level default.
@@ -132,7 +130,9 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	var messages []ai.Message
 	if len(step.Memory) > 0 {
 		// Explicit: only the named steps' outputs as single assistant turns.
-		results := e.context.Results
+		// ResultsSnapshot takes the read lock — concurrent steps may be
+		// storing results while this runs.
+		results := e.context.ResultsSnapshot()
 		for _, name := range step.Memory {
 			if out, ok := results[name]; ok {
 				messages = append(messages, ai.Message{Role: "assistant", Content: out})
@@ -140,7 +140,7 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 		}
 	} else {
 		// Default: all accumulated AI history (truncated to memory window if set).
-		messages = e.aiHistory
+		messages = e.aiHistoryCopy()
 		if e.aiMemoryWindow > 0 && len(messages) > e.aiMemoryWindow*2 {
 			// Keep only the last N*2 messages (each turn = user + assistant).
 			messages = messages[len(messages)-e.aiMemoryWindow*2:]
@@ -162,7 +162,8 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	}
 
 	// A per-step timeout keeps a runaway model from blocking the workflow.
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// Derived from the execution context so a canceled run aborts the call.
+	ctx, cancel := context.WithTimeout(e.executionContext(), 120*time.Second)
 	defer cancel()
 
 	// TUI mode: stream token-by-token, emitting ai_token events so the detail
@@ -177,7 +178,7 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 		resp, err = e.aiProvider.Complete(ctx, req)
 	}
 	if err != nil {
-		return "", fmt.Errorf("ai step '%s': %w", step.Name, err)
+		return "", 0, 0, fmt.Errorf("ai step '%s': %w", step.Name, err)
 	}
 
 	// Persist the generated text into a variable for downstream steps.
@@ -190,27 +191,26 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	}
 	e.context.SetResult(step.Name, resp.Text)
 
-	// Store token counts for executeStep to record on StepResult.
-	e.lastAIInputTokens = resp.InputTokens
-	e.lastAIOutputTokens = resp.OutputTokens
-	// Accumulate into the workflow budget tracker.
-	e.cumulativeTokens += resp.InputTokens + resp.OutputTokens
+	// Accumulate into the workflow budget tracker (mutex-guarded: AI steps
+	// may run concurrently). The per-step counts travel with the return value
+	// so executeStep attributes them to the correct StepResult.
+	e.addAITokens(resp.InputTokens, resp.OutputTokens)
 
 	// Accumulate this turn into the AI history so downstream AI steps (without
 	// explicit memory) see it as conversation context.
-	e.aiHistory = append(e.aiHistory,
+	e.appendAIHistory(
 		ai.Message{Role: "user", Content: prompt},
 		ai.Message{Role: "assistant", Content: resp.Text},
 	)
 
 	// Annotate output with token usage when available, so verbose mode shows
 	// cost. Keep the raw text as the canonical output for consumers.
-	output := resp.Text
+	output = resp.Text
 	if resp.InputTokens > 0 || resp.OutputTokens > 0 {
 		output = fmt.Sprintf("%s\n[tokens: in=%d out=%d]", resp.Text, resp.InputTokens, resp.OutputTokens)
 	}
 
-	return output, nil
+	return output, resp.InputTokens, resp.OutputTokens, nil
 }
 
 // execAIDecide runs the "ai_decide" action: a semantic yes/no judgment. It
@@ -219,24 +219,22 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 // via step.SaveOutput (so it can flow into a condition's expression), and
 // returns a human-readable line as the step output. Marks the step
 // Nondeterministic via the executeStep dispatch.
-func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID string) (bool, error) {
+func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID string) (decided bool, inputTokens, outputTokens int, err error) {
 	if e.aiProvider == nil {
-		return false, fmt.Errorf("ai_decide step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
+		return false, 0, 0, fmt.Errorf("ai_decide step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
 	}
 
 	// Budget check.
-	if e.aiBudget > 0 && e.cumulativeTokens >= e.aiBudget {
-		e.lastAIInputTokens = 0
-		e.lastAIOutputTokens = 0
-		return false, nil
+	if e.aiBudget > 0 && e.cumulativeAITokens() >= e.aiBudget {
+		return false, 0, 0, nil
 	}
 
 	question, err := e.context.ResolveTemplate(step.Question)
 	if err != nil {
-		return false, fmt.Errorf("ai_decide step '%s': resolve question template: %w", step.Name, err)
+		return false, 0, 0, fmt.Errorf("ai_decide step '%s': resolve question template: %w", step.Name, err)
 	}
 	if strings.TrimSpace(question) == "" {
-		return false, fmt.Errorf("ai_decide step '%s': question is empty", step.Name)
+		return false, 0, 0, fmt.Errorf("ai_decide step '%s': question is empty", step.Name)
 	}
 
 	// Force the model to answer only true/false. We keep the prompt minimal so
@@ -246,7 +244,7 @@ func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID st
 
 	system, err := e.context.ResolveTemplate(step.System)
 	if err != nil {
-		return false, fmt.Errorf("ai_decide step '%s': resolve system template: %w", step.Name, err)
+		return false, 0, 0, fmt.Errorf("ai_decide step '%s': resolve system template: %w", step.Name, err)
 	}
 
 	// Model: step-level override takes priority over the workflow-level default.
@@ -256,11 +254,11 @@ func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID st
 	}
 
 	req := ai.Request{
-		System:      system,
-		Prompt:      prompt,
-		Inputs:      extractInputs(question, step.Inputs, e.context.Snapshot()),
-		Model:       decideModel,
-		MaxTokens:   e.aiMaxTokens,
+		System:    system,
+		Prompt:    prompt,
+		Inputs:    extractInputs(question, step.Inputs, e.context.Snapshot()),
+		Model:     decideModel,
+		MaxTokens: e.aiMaxTokens,
 		// Decisions want determinism; force temperature 0 unless the workflow
 		// explicitly set one for creative judging.
 		Temperature: e.aiTemperature,
@@ -270,14 +268,15 @@ func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID st
 		req.MaxTokens = 16
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// Derived from the execution context so a canceled run aborts the call.
+	ctx, cancel := context.WithTimeout(e.executionContext(), 120*time.Second)
 	defer cancel()
 
 	// Decide uses Complete (no streaming): the answer is a single token and
 	// per-token display adds no value.
 	resp, err := e.aiProvider.Complete(ctx, req)
 	if err != nil {
-		return false, fmt.Errorf("ai_decide step '%s': %w", step.Name, err)
+		return false, 0, 0, fmt.Errorf("ai_decide step '%s': %w", step.Name, err)
 	}
 
 	result := parseBoolAnswer(resp.Text)
@@ -287,13 +286,12 @@ func (e *Executor) execAIDecide(step Step, stepID string, depth int, parentID st
 		e.context.Set(step.SaveOutput, strconv.FormatBool(result))
 	}
 
-	// Store token counts for executeStep to record on StepResult.
-	e.lastAIInputTokens = resp.InputTokens
-	e.lastAIOutputTokens = resp.OutputTokens
-	e.cumulativeTokens += resp.InputTokens + resp.OutputTokens
+	// Accumulate into the workflow budget tracker (mutex-guarded). Per-step
+	// token counts travel with the return value for correct attribution.
+	e.addAITokens(resp.InputTokens, resp.OutputTokens)
 	e.context.SetResult(step.Name, strconv.FormatBool(result))
 
-	return result, nil
+	return result, resp.InputTokens, resp.OutputTokens, nil
 }
 
 // parseBoolAnswer tolerantly extracts a boolean from a model's text response.
@@ -399,4 +397,3 @@ func expandJSONOutput(e *Executor, prefix, text string) {
 		e.context.Set(prefix+"."+k, fmt.Sprintf("%v", v))
 	}
 }
-

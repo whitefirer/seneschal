@@ -11,20 +11,20 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 	items, err := e.parseItems(container.Items)
 	if err != nil {
 		return StepResult{
-			Name:     container.Name,
-			Action:   container.Action,
-			Status:   "failed",
-			Error:    fmt.Sprintf("parse items: %v", err),
+			Name:   container.Name,
+			Action: container.Action,
+			Status: "failed",
+			Error:  fmt.Sprintf("parse items: %v", err),
 		}
 	}
-	
+
 	if len(items) == 0 {
 		return StepResult{
 			Name:   container.Name,
 			Status: "completed",
 		}
 	}
-	
+
 	// 获取迭代变量名
 	itemVar := container.ItemVar
 	if itemVar == "" {
@@ -51,34 +51,34 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		e.context.Set(itemVar, item)
 		e.context.Set(itemVar+"_index", fmt.Sprintf("%d", i))
 		e.context.Set(itemVar+"_value", item)
-		
+
 		// 为每次迭代创建子 DAG
 		graph, err := e.buildDAGGraph(container.Do)
 		if err != nil {
 			return StepResult{
-				Name:     container.Name,
-				Action:   container.Action,
-				Status:   "failed",
+				Name:   container.Name,
+				Action: container.Action,
+				Status: "failed",
 				Error:  fmt.Sprintf("iteration %d: build DAG graph: %v", i, err),
 			}
 		}
-		
+
 		// 拓扑排序
 		order, err := e.topologicalSort(graph)
 		if err != nil {
 			return StepResult{
-				Name:     container.Name,
-				Action:   container.Action,
-				Status:   "failed",
+				Name:   container.Name,
+				Action: container.Action,
+				Status: "failed",
 				Error:  fmt.Sprintf("iteration %d: topological sort: %v", i, err),
 			}
 		}
-		
+
 		// 执行迭代内的步骤
 		completed := make(map[string]*StepResult)
 		completedMutex := sync.Mutex{}
 		waiting := make(map[string][]string)
-		
+
 		// Initialize waiting list
 		for id, node := range graph {
 			pending := []string{}
@@ -91,7 +91,7 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 				waiting[id] = pending
 			}
 		}
-		
+
 		// Find entry nodes
 		ready := []string{}
 		for _, id := range order {
@@ -99,23 +99,23 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 				ready = append(ready, id)
 			}
 		}
-		
+
 		hasError := false
 		firstErr := ""
-		
+
 		for len(ready) > 0 && !hasError {
 			var wg sync.WaitGroup
 			waveResults := make(map[string]*StepResult)
 			resultsMutex := sync.Mutex{}
-			
+
 			for _, id := range ready {
 				wg.Add(1)
 				go func(nodeID string) {
 					defer wg.Done()
-					
+
 					node := graph[nodeID]
 					var stepResult StepResult
-					
+
 					// 为迭代中的步骤生成唯一 ID
 					iterStep := node.Step
 					if iterStep.ID == "" {
@@ -123,27 +123,27 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 					}
 					// 递归处理嵌套容器
 					if iterStep.Action == "condition" || iterStep.Action == "parallel" ||
-					   iterStep.Action == "foreach" || iterStep.Action == "loop" {
+						iterStep.Action == "foreach" || iterStep.Action == "loop" {
 						stepResult = e.executeContainerDAG(iterStep, depth+1, result, containerStepID)
 					} else {
 						stepResult = e.executeStep(iterStep, depth+1, result, containerStepID)
 					}
-					
+
 					resultsMutex.Lock()
 					waveResults[nodeID] = &stepResult
 					resultsMutex.Unlock()
 				}(id)
 			}
-			
+
 			wg.Wait()
-			
+
 			// Process wave results
 			for _, id := range ready {
 				sr := waveResults[id]
-				
+
 				// 添加到结果列表
 				// child result tracked in container.Children only
-				
+
 				// 只有当这个节点是在 Do 块定义中时才添加到 allChildren
 				// 检查这个节点是否在容器的 Do 块内
 				isInDoBlock := false
@@ -156,11 +156,11 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 				if isInDoBlock {
 					allChildren = append(allChildren, *sr)
 				}
-				
+
 				completedMutex.Lock()
 				completed[id] = sr
 				completedMutex.Unlock()
-				
+
 				if sr.Status == "failed" && !graph[id].Step.ContinueOnError {
 					hasError = true
 					if firstErr == "" {
@@ -168,11 +168,11 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 					}
 				}
 			}
-			
+
 			if hasError {
 				break
 			}
-			
+
 			// Find next ready nodes
 			newReady := []string{}
 			for id, pending := range waiting {
@@ -182,7 +182,7 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 						newPending = append(newPending, dep)
 					}
 				}
-				
+
 				if len(newPending) == 0 {
 					newReady = append(newReady, id)
 					delete(waiting, id)
@@ -190,20 +190,20 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 					waiting[id] = newPending
 				}
 			}
-			
+
 			ready = newReady
 		}
-		
+
 		if hasError {
 			return StepResult{
-				Name:     container.Name,
-				Action:   container.Action,
-				Status:   "failed",
+				Name:   container.Name,
+				Action: container.Action,
+				Status: "failed",
 				Error:  firstErr,
 			}
 		}
 	}
-	
+
 	return StepResult{
 		Name:     container.Name,
 		Action:   container.Action,
@@ -214,7 +214,7 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 
 func (e *Executor) parseItems(items interface{}) ([]string, error) {
 	result := []string{}
-	
+
 	switch v := items.(type) {
 	case string:
 		// 字符串：可能是变量名或逗号分隔的列表
@@ -252,7 +252,7 @@ func (e *Executor) parseItems(items interface{}) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("unsupported items type: %T", items)
 	}
-	
+
 	return result, nil
 }
 
@@ -274,7 +274,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		Name:      container.Name,
 		Variables: e.context.Snapshot(),
 	}
-	
+
 	// 根据容器类型收集子节点
 	var children []Step
 	if container.Action == "condition" {
@@ -312,7 +312,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			Error:  fmt.Sprintf("build child DAG graph: %v", err),
 		}
 	}
-	
+
 	// 拓扑排序子 DAG
 	order, err := e.topologicalSort(graph)
 	if err != nil {
@@ -322,12 +322,12 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			Error:  fmt.Sprintf("topological sort child DAG: %v", err),
 		}
 	}
-	
+
 	// 执行子节点（支持嵌套容器）
 	completed := make(map[string]*StepResult)
 	completedMutex := sync.Mutex{}
 	waiting := make(map[string][]string)
-	
+
 	// Initialize waiting list
 	for id, node := range graph {
 		pending := []string{}
@@ -340,7 +340,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			waiting[id] = pending
 		}
 	}
-	
+
 	// Find entry nodes
 	ready := []string{}
 	for _, id := range order {
@@ -348,47 +348,47 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			ready = append(ready, id)
 		}
 	}
-	
+
 	hasError := false
 	firstErr := ""
 	containerChildren := make([]StepResult, 0)
-	
+
 	for len(ready) > 0 && !hasError {
 		var wg sync.WaitGroup
 		waveResults := make(map[string]*StepResult)
 		resultsMutex := sync.Mutex{}
-		
+
 		for _, id := range ready {
 			wg.Add(1)
 			go func(nodeID string) {
 				defer wg.Done()
-				
+
 				node := graph[nodeID]
 				var stepResult StepResult
-				
+
 				// 递归处理嵌套容器
 				if node.Step.Action == "condition" || node.Step.Action == "parallel" ||
-				   node.Step.Action == "foreach" || node.Step.Action == "loop" {
+					node.Step.Action == "foreach" || node.Step.Action == "loop" {
 					stepResult = e.executeContainerDAG(node.Step, depth+1, result, containerStepID)
 				} else {
 					stepResult = e.executeStep(node.Step, depth+1, result, containerStepID)
 				}
-				
+
 				resultsMutex.Lock()
 				waveResults[nodeID] = &stepResult
 				resultsMutex.Unlock()
 			}(id)
 		}
-		
+
 		wg.Wait()
-		
+
 		// Process wave results
 		for _, id := range ready {
 			sr := waveResults[id]
-			
+
 			// 添加到结果列表
 			// child result tracked in container.Children only
-			
+
 			// 只有当这个节点是在容器子步骤定义中时才添加到 containerChildren
 			// 检查这个节点是否在容器的 Steps/Then/Else 块内
 			isInContainerBlock := false
@@ -415,15 +415,15 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 					}
 				}
 			}
-			
+
 			if isInContainerBlock {
 				containerChildren = append(containerChildren, *sr)
 			}
-			
+
 			completedMutex.Lock()
 			completed[id] = sr
 			completedMutex.Unlock()
-			
+
 			if sr.Status == "failed" && !graph[id].Step.ContinueOnError {
 				hasError = true
 				if firstErr == "" {
@@ -431,11 +431,11 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				}
 			}
 		}
-		
+
 		if hasError {
 			break
 		}
-		
+
 		// Find next ready nodes
 		newReady := []string{}
 		for id, pending := range waiting {
@@ -445,7 +445,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 					newPending = append(newPending, dep)
 				}
 			}
-			
+
 			if len(newPending) == 0 {
 				newReady = append(newReady, id)
 				delete(waiting, id)
@@ -453,11 +453,10 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 				waiting[id] = newPending
 			}
 		}
-		
+
 		ready = newReady
 	}
-	
-	
+
 	if hasError {
 		containerResult := StepResult{
 			ID:       containerStepID,
@@ -467,29 +466,29 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			Error:    firstErr,
 			Children: containerChildren,
 		}
-			if container.Action == "condition" {
-				evalResult, _ := e.evaluateExpression(container.Expression)
-				containerResult.ConditionResult = &evalResult
-			}
+		if container.Action == "condition" {
+			evalResult, _ := e.evaluateExpression(container.Expression)
+			containerResult.ConditionResult = &evalResult
+		}
 		// Send WebSocket events for container completion
 		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, "", depth, parentID, nil)
 		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
 		return containerResult
 	}
-	
+
 	containerResult := StepResult{
 		ID:     containerStepID,
 		Name:   container.Name,
 		Action: container.Action,
 		Status: "success",
 	}
-	
+
 	// For condition nodes, set ThenChildren/ElseChildren instead of Children
 	if container.Action == "condition" {
 		containerResult.Children = nil
 		// Determine which branch was executed based on condition result
 		evalResult, _ := e.evaluateExpression(container.Expression)
-			containerResult.ConditionResult = &evalResult
+		containerResult.ConditionResult = &evalResult
 		if evalResult {
 			containerResult.ThenChildren = containerChildren // Executed branch
 			// Create skipped results for else branch
@@ -511,10 +510,8 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		// For parallel/foreach/loop, set Children
 		containerResult.Children = containerChildren
 	}
-	
+
 	// Send WebSocket events for container completion
 	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", depth, parentID, containerResult.ConditionResult)
 	return containerResult
 }
-
-

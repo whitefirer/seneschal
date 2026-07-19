@@ -14,7 +14,7 @@ func (e *Executor) execSet(step Step) (string, error) {
 	}
 
 	e.context.Set(step.Name, value)
-	
+
 	// Generate ID if not present
 	stepID := step.ID
 	if stepID == "" {
@@ -22,9 +22,9 @@ func (e *Executor) execSet(step Step) (string, error) {
 	}
 
 	output := fmt.Sprintf("Set %s = %s", step.Name, value)
-	
+
 	// Note: step_output is sent by executeStep() to avoid duplication
-	
+
 	if e.verbose {
 		fmt.Printf("    = %s → %s\n", step.Name, value)
 	}
@@ -49,15 +49,15 @@ func (e *Executor) execSleep(step Step) (string, error) {
 	} else if e.printer != nil {
 		e.printer.PrintSleep(duration.String())
 	}
-	
+
 	// Send sleep start event (progress indicator)
 	e.sendEvent("step_output", step.Name, stepID, "sleep", "running", fmt.Sprintf("Sleeping for %s...", duration.String()), "", 0, "", nil)
-	
+
 	time.Sleep(duration)
-	
+
 	// Note: final output is sent by executeStep() to avoid duplication
 	output := fmt.Sprintf("Slept for %s", duration.String())
-	
+
 	return output, nil
 }
 
@@ -84,10 +84,10 @@ func (e *Executor) execLog(step Step) string {
 	} else if e.printer != nil {
 		e.printer.PrintLog(level, msg)
 	}
-	
+
 	// Format output (note: step_output is sent by executeStep() to avoid duplication)
 	output := fmt.Sprintf("[%s] %s", strings.ToUpper(level), msg)
-	
+
 	return output
 }
 
@@ -118,10 +118,9 @@ func (e *Executor) execTemplate(step Step) (string, error) {
 	}
 
 	output := fmt.Sprintf("Rendered %s → %s (%d bytes)", step.Source, outputPath, len(result))
-	
+
 	// Note: step_output is sent by executeStep() to avoid duplication
 
 	e.context.SetResult(step.Name, fmt.Sprintf("wrote %d bytes to %s", len(result), outputPath))
 	return output, nil
 }
-

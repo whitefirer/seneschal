@@ -66,6 +66,26 @@ func (c *Context) SetResult(key, value string) {
 	c.mu.Unlock()
 }
 
+// GetResult retrieves a stored step result by step name.
+func (c *Context) GetResult(name string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.Results[name]
+	return v, ok
+}
+
+// ResultsSnapshot returns a copy of all step results (for safe iteration
+// while concurrent steps may be storing new results).
+func (c *Context) ResultsSnapshot() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	m := make(map[string]string, len(c.Results))
+	for k, v := range c.Results {
+		m[k] = v
+	}
+	return m
+}
+
 // Snapshot returns a copy of all variables (for safe iteration).
 func (c *Context) Snapshot() map[string]string {
 	c.mu.RLock()

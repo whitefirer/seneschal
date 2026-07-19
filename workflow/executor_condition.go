@@ -2,9 +2,9 @@ package workflow
 
 import (
 	"fmt"
+	exprlib "github.com/expr-lang/expr"
 	"strconv"
 	"strings"
-	exprlib "github.com/expr-lang/expr"
 )
 
 func createSkippedStepResult(s Step) StepResult {
@@ -182,4 +182,3 @@ func evaluateLegacy(expr string) (bool, error) {
 
 	return expr != "", nil
 }
-

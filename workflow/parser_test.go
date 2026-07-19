@@ -156,3 +156,94 @@ func containsStr(slice []string, s string) bool {
 	}
 	return false
 }
+
+func TestValidate_DuplicateStepNames(t *testing.T) {
+	wf := &Workflow{
+		Name: "dup",
+		Steps: []Step{
+			{Name: "a", Action: "log", Message: "1"},
+			{Name: "a", Action: "log", Message: "2"},
+		},
+	}
+	errs := wf.Validate()
+	found := false
+	for _, e := range errs {
+		if matchStr(e.Error(), "duplicate step id") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate step id error, got %v", errs)
+	}
+}
+
+func TestValidate_DuplicateExplicitIDs(t *testing.T) {
+	// Different names but the same explicit id collide just the same.
+	wf := &Workflow{
+		Name: "dup-id",
+		Steps: []Step{
+			{Name: "a", ID: "shared", Action: "log", Message: "1"},
+			{Name: "b", ID: "shared", Action: "log", Message: "2"},
+		},
+	}
+	errs := wf.Validate()
+	found := false
+	for _, e := range errs {
+		if matchStr(e.Error(), "duplicate step id") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate step id error, got %v", errs)
+	}
+}
+
+func TestValidate_DuplicateStepNamesNested(t *testing.T) {
+	// A nested child step colliding with a top-level step (the engine keeps
+	// one global name->step map for dependency inference).
+	wf := &Workflow{
+		Name: "dup-nested",
+		Steps: []Step{
+			{Name: "a", Action: "log", Message: "top"},
+			{Name: "par", Action: "parallel", Steps: []Step{
+				{Name: "a", Action: "log", Message: "nested"},
+			}},
+		},
+	}
+	errs := wf.Validate()
+	found := false
+	for _, e := range errs {
+		if matchStr(e.Error(), "duplicate step id") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate step id error for nested collision, got %v", errs)
+	}
+}
+
+func TestValidate_NestedUniqueNamesOK(t *testing.T) {
+	wf := &Workflow{
+		Name: "nested-ok",
+		Steps: []Step{
+			{Name: "prep", Action: "log", Message: "p"},
+			{Name: "par", Action: "parallel", Steps: []Step{
+				{Name: "p1", Action: "log", Message: "1"},
+				{Name: "p2", Action: "log", Message: "2"},
+			}},
+			{Name: "cond", Action: "condition", Expression: "true",
+				Then: []Step{{Name: "t1", Action: "log", Message: "t"}},
+				Else: []Step{{Name: "e1", Action: "log", Message: "e"}},
+			},
+			{Name: "each", Action: "foreach", Items: "a,b", Do: []Step{
+				{Name: "d1", Action: "log", Message: "d"},
+			}},
+		},
+	}
+	errs := wf.Validate()
+	for _, e := range errs {
+		if matchStr(e.Error(), "duplicate step id") {
+			t.Errorf("unexpected duplicate error for unique tree: %v", e)
+		}
+	}
+}

@@ -63,6 +63,11 @@ func (e *Executor) execWorkflow(step Step) (string, []StepResult, error) {
 	// Execute the sub-workflow with a fresh executor (isolated context, but
 	// shares the AI provider so model config works).
 	subExecutor := NewExecutor(subVars)
+	// Propagate the cancellation context so quitting the TUI (or another
+	// abort) also stops the sub-workflow's in-flight steps.
+	if e.execCtx != nil {
+		subExecutor.execCtx = e.execCtx
+	}
 	if e.aiProvider != nil {
 		subExecutor.SetAIProvider(e.aiProvider)
 	}

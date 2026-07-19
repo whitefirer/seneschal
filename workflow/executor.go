@@ -3,11 +3,11 @@ package workflow
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
-	"net/http"
 
 	"github.com/whitefirer/seneschal/workflow/ai"
 )
@@ -17,41 +17,41 @@ type StepCallback func(stepName string, result StepResult)
 
 // ProgressEvent represents a workflow execution event for real-time streaming.
 type ProgressEvent struct {
-	Type            string `json:"type"`             // workflow_start, step_start, step_output, step_complete, workflow_end
-	Name            string `json:"name,omitempty"`   // step name
-	StepId          string `json:"step_id,omitempty"` // step ID
-	Action          string `json:"action,omitempty"` // step action type
-	Status          string `json:"status,omitempty"` // success, failed, running, skipped
-	Output          string `json:"output,omitempty"` // step output
-	Error           string `json:"error,omitempty"`  // error message
-	Duration        string `json:"duration,omitempty"` // step duration
-	Time            string `json:"time,omitempty"`   // timestamp
+	Type            string `json:"type"`                       // workflow_start, step_start, step_output, step_complete, workflow_end
+	Name            string `json:"name,omitempty"`             // step name
+	StepId          string `json:"step_id,omitempty"`          // step ID
+	Action          string `json:"action,omitempty"`           // step action type
+	Status          string `json:"status,omitempty"`           // success, failed, running, skipped
+	Output          string `json:"output,omitempty"`           // step output
+	Error           string `json:"error,omitempty"`            // error message
+	Duration        string `json:"duration,omitempty"`         // step duration
+	Time            string `json:"time,omitempty"`             // timestamp
 	ConditionResult *bool  `json:"condition_result,omitempty"` // condition evaluation result
-	Depth      int    `json:"depth,omitempty"`
-	ParentId   string `json:"parent_id,omitempty"`
-	StepName   string `json:"step_name,omitempty"`
+	Depth           int    `json:"depth,omitempty"`
+	ParentId        string `json:"parent_id,omitempty"`
+	StepName        string `json:"step_name,omitempty"`
 }
 
 // Executor executes workflow steps.
 type Executor struct {
-	context        *Context
-	verbose        bool
-	dryRun         bool
-	httpClient     *http.Client
-	stepCallback   StepCallback
-	OnProgress     func(ProgressEvent) // callback for real-time progress streaming
-	printer        *PrettyPrinter      // pretty output printer (legacy)
-	richPrinter    *RichPrinter        // rich output printer
-	realtimePrinter *RealtimePrinter   // realtime TUI printer
-	outputMode     OutputMode          // output mode
-	totalSteps     int
-	themeName      string              // theme name
-	tuiStyle       string              // TUI style: "hermes" or "claude"
-	forceColor     bool                // force color output even if not a terminal
-	workflowDir    string              // directory of the current workflow file (for sub-workflow relative paths)
-	workflowName   string              // current workflow name (for hooks)
-	workflowHooks  []HookConfig        // workflow-level hooks (stored for step inheritance)
-	globalHooks    []HookConfig        // server-level hooks (applied to all workflows)
+	context         *Context
+	verbose         bool
+	dryRun          bool
+	httpClient      *http.Client
+	stepCallback    StepCallback
+	OnProgress      func(ProgressEvent) // callback for real-time progress streaming
+	printer         *PrettyPrinter      // pretty output printer (legacy)
+	richPrinter     *RichPrinter        // rich output printer
+	realtimePrinter *RealtimePrinter    // realtime TUI printer
+	outputMode      OutputMode          // output mode
+	totalSteps      int
+	themeName       string       // theme name
+	tuiStyle        string       // TUI style: "hermes" or "claude"
+	forceColor      bool         // force color output even if not a terminal
+	workflowDir     string       // directory of the current workflow file (for sub-workflow relative paths)
+	workflowName    string       // current workflow name (for hooks)
+	workflowHooks   []HookConfig // workflow-level hooks (stored for step inheritance)
+	globalHooks     []HookConfig // server-level hooks (applied to all workflows)
 	// AI integration (Phase 2). aiProvider is set via SetAIProvider or built
 	// from the workflow's ai: config in Execute(). The ai* fields hold
 	// workflow-level defaults; steps may override per-step in M3+.
@@ -59,17 +59,27 @@ type Executor struct {
 	aiModel       string
 	aiMaxTokens   int
 	aiTemperature float64
-	// AI conversation history accumulated within one execution.
+	// mu guards the mutable execution state below (AI token accounting,
+	// conversation history, replay counters). Steps run concurrently
+	// (DAG waves, parallel, foreach), so all access goes through the small
+	// helper methods (addAITokens, aiHistoryCopy, incReplayHit, ...).
+	mu sync.Mutex
+	// AI conversation history accumulated within one execution. Guarded by mu.
 	aiHistory []ai.Message
-	// last AI token counts (set by execAI, read by executeStep dispatch)
-	lastAIInputTokens  int
-	lastAIOutputTokens int
-	// cumulative AI token usage across all steps in this execution
-	cumulativeTokens  int
-	aiBudget          int // workflow-level token budget (0 = unlimited)
-	aiMemoryWindow    int // max prior AI turns to keep (0 = unlimited)
-	aiOnError         string // workflow-level on_error: "ai" / "ai_auto" / "" (off)
-	aiOnErrorMode     string // resolved mode for workflow-level default
+	// Per-step AI token counts are returned by execAI/execAIDecide and written
+	// directly to the StepResult by executeStep — parallel AI steps must not
+	// share a single-slot field or tokens get attributed to the wrong step.
+	// cumulative AI token usage across all steps in this execution. Guarded by mu.
+	cumulativeTokens int
+	aiBudget         int    // workflow-level token budget (0 = unlimited)
+	aiMemoryWindow   int    // max prior AI turns to keep (0 = unlimited)
+	aiOnError        string // workflow-level on_error: "ai" / "ai_auto" / "" (off)
+	aiOnErrorMode    string // resolved mode for workflow-level default
+	// execCtx is the cancellation context for the current run, set up by
+	// Execute. Quitting the TUI (or another abort path) cancels it so
+	// in-flight shell commands / AI calls stop instead of leaking goroutines.
+	execCtx    context.Context
+	execCancel context.CancelFunc
 	// Replay cache (Phase 4): maps step ID (or Name fallback) to a stored
 	// StepResult. When non-nil, executeStep returns the cached result for
 	// deterministic steps instead of re-executing them. AI / nondeterministic
@@ -77,7 +87,7 @@ type Executor struct {
 	// SetReplayCache; nil means normal execution (no replay).
 	replayCache map[string]*StepResult
 	// replayStats tracks how many steps were served from cache vs re-executed,
-	// for the replay summary. Reset when SetReplayCache is called.
+	// for the replay summary. Reset when SetReplayCache is called. Guarded by mu.
 	replayedHits   int
 	replayedMisses int
 }
@@ -91,6 +101,8 @@ func (e *Executor) SetGlobalHooks(hooks []HookConfig) { e.globalHooks = hooks }
 
 // SetReplayCache enables replay mode: deterministic steps present in the cache
 func (e *Executor) SetReplayCache(cache map[string]*StepResult) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.replayCache = cache
 	e.replayedHits = 0
 	e.replayedMisses = 0
@@ -100,7 +112,66 @@ func (e *Executor) SetReplayCache(cache map[string]*StepResult) {
 // replay cache vs actually executed. Meaningful only after a run with
 // SetReplayCache enabled.
 func (e *Executor) ReplayStats() (hits, misses int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.replayedHits, e.replayedMisses
+}
+
+// addAITokens accumulates one AI call's token usage into the workflow budget
+// tracker. Safe for concurrent AI steps.
+func (e *Executor) addAITokens(in, out int) {
+	e.mu.Lock()
+	e.cumulativeTokens += in + out
+	e.mu.Unlock()
+}
+
+// cumulativeAITokens returns the current cumulative token usage (for budget
+// checks). Safe for concurrent AI steps.
+func (e *Executor) cumulativeAITokens() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.cumulativeTokens
+}
+
+// appendAIHistory records one AI turn so downstream AI steps (without explicit
+// memory) see it as conversation context. Safe for concurrent AI steps.
+func (e *Executor) appendAIHistory(msgs ...ai.Message) {
+	e.mu.Lock()
+	e.aiHistory = append(e.aiHistory, msgs...)
+	e.mu.Unlock()
+}
+
+// aiHistoryCopy returns a copy of the accumulated AI conversation history.
+func (e *Executor) aiHistoryCopy() []ai.Message {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]ai.Message, len(e.aiHistory))
+	copy(out, e.aiHistory)
+	return out
+}
+
+// incReplayHit / incReplayMiss count replay cache outcomes from concurrent
+// step goroutines.
+func (e *Executor) incReplayHit() {
+	e.mu.Lock()
+	e.replayedHits++
+	e.mu.Unlock()
+}
+
+func (e *Executor) incReplayMiss() {
+	e.mu.Lock()
+	e.replayedMisses++
+	e.mu.Unlock()
+}
+
+// executionContext returns the cancellation context for the current run.
+// Falls back to Background when Execute hasn't set one up (e.g. tests calling
+// internals directly).
+func (e *Executor) executionContext() context.Context {
+	if e.execCtx != nil {
+		return e.execCtx
+	}
+	return context.Background()
 }
 
 // SetStepCallback sets a callback invoked after each step completes.
@@ -231,11 +302,11 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 		Time:            Now(),
 		ConditionResult: conditionResult,
 	}
-	
+
 	if e.OnProgress != nil {
 		e.OnProgress(event)
 	}
-	
+
 	// Send to TUI event channel if available
 	if e.realtimePrinter != nil {
 		ev := ProgressEvent{
@@ -298,6 +369,18 @@ func (e *Executor) sendAIToken(name, stepID, action string, depth int, parentID,
 // Execute runs a workflow and returns the result.
 // Execute runs the workflow.
 func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
+	// Set up the cancellation context for this run. Quitting the TUI (or any
+	// other abort path) cancels it so in-flight steps stop promptly. Cleared
+	// on return so a reused Executor starts the next run with a fresh context.
+	if e.execCtx == nil {
+		e.execCtx, e.execCancel = context.WithCancel(context.Background())
+		defer func() {
+			e.execCancel()
+			e.execCtx = nil
+			e.execCancel = nil
+		}()
+	}
+
 	result := &WorkflowResult{
 		Name:      wf.Name,
 		Status:    "success",
@@ -380,6 +463,10 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 
 	result = e.runWorkflow(wf, result)
 
+	// Mask sensitive values in the finalized result before it is persisted,
+	// exported, or served via the API.
+	e.finalizeResult(result)
+
 	// Emit the structured export to stdout if requested.
 	if IsExportMode(e.outputMode) {
 		exportResult(e.outputMode, result)
@@ -397,14 +484,45 @@ func (e *Executor) runTUI(wf *Workflow, result *WorkflowResult) *WorkflowResult 
 	e.realtimePrinter.SetEventChannel(ch)
 
 	// Run workflow in background goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		e.runWorkflow(wf, result)
 		close(ch)
 	}()
 
-	// Block on TUI (main goroutine)
+	// Block on TUI (main goroutine). When the user quits early, Run returns
+	// while the workflow is still running: cancel in-flight work and wait for
+	// the background goroutine — otherwise reading result below would race
+	// its writes and the goroutine would leak.
 	e.realtimePrinter.Run()
+	if e.execCancel != nil {
+		e.execCancel()
+	}
+	wg.Wait()
+
+	// Mask sensitive values in the finalized result (see finalizeResult).
+	e.finalizeResult(result)
 	return result
+}
+
+// finalizeResult masks sensitive values in the finalized result tree: any
+// occurrence of a sensitive variable's value in step outputs (recursively,
+// including container children) is replaced with "******". This runs once at
+// the end of Execute so stored snapshots, exports, and API responses are
+// masked by construction.
+//
+// Real-time output during execution (terminal stream, progress events) is
+// intentionally NOT masked — masking there would garble live logs. Result
+// variables are also left untouched here: they are masked at display time by
+// MaskWorkflowResult (export/API), and stored snapshots must keep real values
+// so replay can restore them.
+func (e *Executor) finalizeResult(result *WorkflowResult) {
+	if result == nil || len(result.SensitivePatterns) == 0 {
+		return
+	}
+	MaskStepResultVariables(result.Steps, result.SensitivePatterns, e.context.Snapshot())
 }
 
 // runWorkflow executes the core workflow logic without TUI setup.
@@ -439,8 +557,14 @@ func (e *Executor) runWorkflow(wf *Workflow, result *WorkflowResult) *WorkflowRe
 
 	e.sendEvent("workflow_end", wf.Name, "", "", result.Status, result.Error, "", 0, "", nil)
 
-	// Fire workflow_end hooks.
-	e.fireWorkflowHooks(wf, result)
+	// Fire workflow_end hooks. An ai_auto hook may veto the outcome (abort).
+	if hr := e.fireWorkflowHooks(wf, result); hr.Action == "abort" {
+		result.Status = "failed"
+		if result.Error != "" {
+			result.Error += "\n"
+		}
+		result.Error += fmt.Sprintf("aborted by hook: %s", hr.Reason)
+	}
 
 	result.EndTime = Now()
 
@@ -471,7 +595,7 @@ type DAGNode struct {
 // 注意：只处理主流程节点，容器子节点由容器的 executeStep 内部处理
 func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
 	graph := make(map[string]*DAGNode)
-	
+
 	// 创建 ID 映射：原始 name → 生成的 ID
 	nameToId := make(map[string]string)
 
@@ -479,9 +603,9 @@ func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
 	for _, step := range steps {
 		id := step.ID
 		if id == "" {
-			id = step.Name  // 直接使用 name 作为 ID
+			id = step.Name // 直接使用 name 作为 ID
 		}
-		
+
 		nameToId[step.Name] = id
 
 		graph[id] = &DAGNode{
@@ -507,7 +631,7 @@ func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
 			}
 		}
 		node.DependsOn = normalizedDeps
-		
+
 		// Normalize Next (只保留主流程节点的引用)
 		normalizedNext := []string{}
 		for _, next := range node.Next {
@@ -519,7 +643,7 @@ func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
 			}
 		}
 		node.Next = normalizedNext
-		
+
 		graph[id] = node
 	}
 
@@ -559,12 +683,19 @@ func (e *Executor) topologicalSort(graph map[string]*DAGNode) ([]string, error) 
 		inDegree[id] = 0
 	}
 
-	// Calculate in-degree based on dependencies
-	// depends_on 表示当前节点依赖于其他节点
+	// Calculate in-degree based on dependencies, and build the reverse
+	// adjacency (dependents) used to decrement in-degrees. Both must derive
+	// from DependsOn: decrementing along Next under-counts nodes whose
+	// dependencies exist only as explicit depends_on entries (no matching
+	// next edge), which used to produce a false "DAG contains a cycle" error.
+	// (buildDAGGraph already folds next edges into DependsOn, so DependsOn is
+	// the complete edge set.)
+	dependents := make(map[string][]string)
 	for _, node := range graph {
 		for _, dep := range node.DependsOn {
 			if _, ok := graph[dep]; ok {
 				inDegree[node.ID]++
+				dependents[dep] = append(dependents[dep], node.ID)
 			}
 		}
 	}
@@ -585,14 +716,13 @@ func (e *Executor) topologicalSort(graph map[string]*DAGNode) ([]string, error) 
 		queue = queue[1:]
 		result = append(result, id)
 
-		// Reduce in-degree of dependent nodes
-		// next 指向的节点依赖于当前节点，所以要减少它们的入度
-		node := graph[id]
-		for _, nextID := range node.Next {
-			if inDegree[nextID] > 0 {
-				inDegree[nextID]--
-				if inDegree[nextID] == 0 {
-					queue = append(queue, nextID)
+		// Reduce in-degree of nodes that depend on the current node
+		// (reverse DependsOn adjacency — see above).
+		for _, depID := range dependents[id] {
+			if inDegree[depID] > 0 {
+				inDegree[depID]--
+				if inDegree[depID] == 0 {
+					queue = append(queue, depID)
 				}
 			}
 		}
@@ -656,6 +786,13 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 	firstErr := ""
 
 	for len(ready) > 0 && !hasError {
+		// Stop scheduling new waves once the run is canceled (e.g. TUI quit).
+		if err := e.executionContext().Err(); err != nil {
+			hasError = true
+			firstErr = "workflow canceled"
+			break
+		}
+
 		// Execute all ready nodes concurrently
 		var wg sync.WaitGroup
 		waveResults := make(map[string]*StepResult)
@@ -668,10 +805,10 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 
 				node := graph[nodeID]
 				var stepResult StepResult
-				
+
 				// 如果是容器节点，递归执行子 DAG
 				if node.Step.Action == "condition" || node.Step.Action == "parallel" ||
-				   node.Step.Action == "foreach" || node.Step.Action == "loop" {
+					node.Step.Action == "foreach" || node.Step.Action == "loop" {
 					stepResult = e.executeContainerDAG(node.Step, 0, result, "")
 				} else {
 					stepResult = e.executeStep(node.Step, 0, result, "")
@@ -776,10 +913,30 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 
 // executeStep executes a single step.
 
-
 // executeForeach 执行 foreach/loop 迭代
 
+// executeStep runs one step and applies control-flow decisions returned by
+// ai_auto after_step hooks: "retry" re-runs the step (capped at maxHookRetries
+// to prevent infinite AI-retry loops); "skip"/"abort" are applied inside
+// executeStepOnce before completion events are emitted.
 func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, parentID string) StepResult {
+	const maxHookRetries = 3
+	for hookRetries := 0; ; hookRetries++ {
+		result, hookDecision := e.executeStepOnce(step, depth, wfResult, parentID)
+		if hookDecision.Action == "retry" && hookRetries < maxHookRetries {
+			if e.verbose {
+				fmt.Printf("  ↻ hook 要求重试 %s (%d/%d): %s\n", step.Name, hookRetries+1, maxHookRetries, hookDecision.Reason)
+			}
+			continue
+		}
+		return result
+	}
+}
+
+// executeStepOnce performs a single dispatch of the step and fires its
+// after_step hooks, returning the (possibly ai_auto-influenced) hook decision
+// so executeStep can act on "retry".
+func (e *Executor) executeStepOnce(step Step, depth int, wfResult *WorkflowResult, parentID string) (StepResult, HookResult) {
 	indent := strings.Repeat("  ", depth)
 	startTime := Now()
 
@@ -804,6 +961,15 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 		JoinMode:    step.JoinMode,
 	}
 
+	// Fail fast when the run was canceled (e.g. TUI quit) — don't start new
+	// steps, don't emit start events.
+	if cerr := e.executionContext().Err(); cerr != nil {
+		result.Status = "failed"
+		result.Error = fmt.Sprintf("canceled: %v", cerr)
+		result.EndTime = Now()
+		return result, HookResult{}
+	}
+
 	// Print step start with pretty output
 	if e.richPrinter != nil {
 		e.richPrinter.PrintStep(step, depth)
@@ -817,7 +983,7 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 		result.Status = "skipped"
 		result.Output = "(dry run)"
 		result.EndTime = Now()
-		return result
+		return result, HookResult{}
 	}
 
 	// Replay: if a cache is configured and this deterministic step has a stored
@@ -834,16 +1000,16 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 		}
 		if cached != nil && !cached.Nondeterministic && cached.Status != "" {
 			// Hit: restore the stored result, preserving its determinism flags.
-			e.replayedHits++
+			e.incReplayHit()
 			c := *cached
 			c.StartTime = startTime
 			c.EndTime = Now()
 			// Re-emit events so UIs/WS see the step "run" (start + complete).
 			e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, parentID, nil)
 			e.sendEvent("step_complete", step.Name, stepID, step.Action, c.Status, c.Output, c.Duration, depth, parentID, c.ConditionResult)
-			return c
+			return c, HookResult{}
 		}
-		e.replayedMisses++
+		e.incReplayMiss()
 	}
 
 	var err error
@@ -866,8 +1032,9 @@ func (e *Executor) executeStep(step Step, depth int, wfResult *WorkflowResult, p
 		}
 	}
 
-	// on_error: ai — outer error-recovery loop.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 120*time.Second)
+	// on_error: ai — outer error-recovery loop. Derived from the execution
+	// context so a canceled run aborts the analysis call too.
+	ctx2, cancel2 := context.WithTimeout(e.executionContext(), 120*time.Second)
 	defer cancel2()
 
 	// on_error: ai — outer error-recovery loop. When the step (including its
@@ -881,93 +1048,100 @@ errorRecovery:
 	for {
 		// Inner: Phase 6 blind retry loop.
 	attemptLoop:
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		// Reset per-attempt state.
-		output = ""
-		children = nil
-		err = nil
-
-		switch step.Action {
-		case "shell":
-			output, err = e.execShell(step)
-			if step.Command != "" {
-				result.ShellCommand = step.Command
-			} else {
-				result.ShellCommand = step.Shell
-			}
-		case "http":
-			output, err = e.execHTTP(step)
-			result.HTTPUrl = step.URL
-			result.HTTPMethod = step.Method
-		case "condition":
-			var execChildren, skippedChildren []StepResult
-			output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult, stepID)
-			result.ConditionResult = &condResult
-			result.Expression = step.Expression
-			if condResult {
-				result.ThenChildren = execChildren
-				result.ElseChildren = skippedChildren
-			} else {
-				result.ElseChildren = execChildren
-				result.ThenChildren = skippedChildren
-			}
+		for attempt := 0; attempt < maxAttempts; attempt++ {
+			// Reset per-attempt state.
+			output = ""
 			children = nil
-		case "set":
-			output, err = e.execSet(step)
-		case "sleep":
-			output, err = e.execSleep(step)
-			result.SleepDuration = step.Duration
-		case "log":
-			output = e.execLog(step)
-			result.LogMessage = step.Message
-		case "parallel":
-			output, children, err = e.execParallel(step, depth, wfResult, stepID)
-		case "template":
-			output, err = e.execTemplate(step)
-		case "foreach":
-			sr := e.executeForeach(step, depth, wfResult, stepID)
-			output = sr.Output
-			children = sr.Children
-			if sr.Status == "failed" {
-				err = fmt.Errorf("%s", sr.Error)
-			}
-		case "ai":
-			output, err = e.execAI(step, stepID, depth, parentID)
-			result.Nondeterministic = true
-		case "ai_decide":
-			decided, derr := e.execAIDecide(step, stepID, depth, parentID)
-			if derr != nil {
-				err = derr
-			} else {
-				result.ConditionResult = &decided
-				output = fmt.Sprintf("decided: %v", decided)
-			}
-			result.Nondeterministic = true
-		case "script":
-			output, err = e.execScript(step)
-			result.SideEffecting = true
-		case "workflow":
-			output, children, err = e.execWorkflow(step)
-			result.SideEffecting = true
-		default:
-			err = fmt.Errorf("unknown action: %s", step.Action)
-		}
+			err = nil
 
-		if err == nil {
-			result.Retries = attempt
-			break attemptLoop // success
-		}
-		if attempt < maxAttempts-1 {
-			if e.verbose {
-				fmt.Printf("%s  ↻ retrying %s (attempt %d/%d) after %s\n", indent, step.Name, attempt+2, maxAttempts, retryDelay)
+			switch step.Action {
+			case "shell":
+				output, err = e.execShell(step)
+				if step.Command != "" {
+					result.ShellCommand = step.Command
+				} else {
+					result.ShellCommand = step.Shell
+				}
+			case "http":
+				output, err = e.execHTTP(step)
+				result.HTTPUrl = step.URL
+				result.HTTPMethod = step.Method
+			case "condition":
+				var execChildren, skippedChildren []StepResult
+				output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult, stepID)
+				result.ConditionResult = &condResult
+				result.Expression = step.Expression
+				if condResult {
+					result.ThenChildren = execChildren
+					result.ElseChildren = skippedChildren
+				} else {
+					result.ElseChildren = execChildren
+					result.ThenChildren = skippedChildren
+				}
+				children = nil
+			case "set":
+				output, err = e.execSet(step)
+			case "sleep":
+				output, err = e.execSleep(step)
+				result.SleepDuration = step.Duration
+			case "log":
+				output = e.execLog(step)
+				result.LogMessage = step.Message
+			case "parallel":
+				output, children, err = e.execParallel(step, depth, wfResult, stepID)
+			case "template":
+				output, err = e.execTemplate(step)
+			case "foreach":
+				sr := e.executeForeach(step, depth, wfResult, stepID)
+				output = sr.Output
+				children = sr.Children
+				if sr.Status == "failed" {
+					err = fmt.Errorf("%s", sr.Error)
+				}
+			case "ai":
+				var inTok, outTok int
+				output, inTok, outTok, err = e.execAI(step, stepID, depth, parentID)
+				// Token counts travel with the return value — parallel AI
+				// steps each get their own counts, not a shared slot's.
+				result.InputTokens = inTok
+				result.OutputTokens = outTok
+				result.Nondeterministic = true
+			case "ai_decide":
+				decided, inTok, outTok, derr := e.execAIDecide(step, stepID, depth, parentID)
+				result.InputTokens = inTok
+				result.OutputTokens = outTok
+				if derr != nil {
+					err = derr
+				} else {
+					result.ConditionResult = &decided
+					output = fmt.Sprintf("decided: %v", decided)
+				}
+				result.Nondeterministic = true
+			case "script":
+				output, err = e.execScript(step)
+				result.SideEffecting = true
+			case "workflow":
+				output, children, err = e.execWorkflow(step)
+				result.SideEffecting = true
+			default:
+				err = fmt.Errorf("unknown action: %s", step.Action)
 			}
-			if retryDelay > 0 {
-				time.Sleep(retryDelay)
+
+			if err == nil {
+				result.Retries = attempt
+				break attemptLoop // success
 			}
-		} else {
-			result.Retries = attempt
-		}
-	} // end attemptLoop
+			if attempt < maxAttempts-1 {
+				if e.verbose {
+					fmt.Printf("%s  ↻ retrying %s (attempt %d/%d) after %s\n", indent, step.Name, attempt+2, maxAttempts, retryDelay)
+				}
+				if retryDelay > 0 {
+					time.Sleep(retryDelay)
+				}
+			} else {
+				result.Retries = attempt
+			}
+		} // end attemptLoop
 
 		// on_error: ai — if the step still failed after all retries, let AI
 		// analyze and decide what to do.
@@ -1007,7 +1181,7 @@ errorRecovery:
 				result.Children = children
 				result.EndTime = Now()
 				e.sendEvent("step_complete", step.Name, stepID, step.Action, "skipped", "", "", depth, parentID, nil)
-				return result
+				return result, HookResult{}
 			case decision.Action == "abort" && mode == "auto":
 				// Fall through to normal failure handling, but augment error.
 				err = fmt.Errorf("%s\nAI 建议中止: %s", err, decision.Reason)
@@ -1024,18 +1198,17 @@ errorRecovery:
 	result.Children = children
 
 	// 填充确定性标记初值(见 docs/PRODUCT.md 的"三种确定性层级")
+	// (AI token counts were already recorded on the result by the dispatch
+	// above — they travel with the execAI/execAIDecide return values.)
 	switch step.Action {
 	case "shell", "http", "template":
 		result.SideEffecting = true
 	case "ai", "ai_decide":
 		result.Nondeterministic = true
-		// Record token usage from the last AI call.
-		result.InputTokens = e.lastAIInputTokens
-		result.OutputTokens = e.lastAIOutputTokens
 	}
 
 	result.EndTime = Now()
-	
+
 	// Calculate duration
 	if startTime != "" && result.EndTime != "" {
 		if start, err := time.Parse(time.RFC3339, startTime); err == nil {
@@ -1073,8 +1246,25 @@ errorRecovery:
 		e.stepCallback(step.Name, result)
 	}
 
-	// Fire after_step hooks (step-level + inherited workflow-level).
-	e.fireStepHooks(step, result)
+	// Fire after_step hooks (step-level + inherited workflow-level). An
+	// ai_auto hook may return a control-flow decision: skip/abort are applied
+	// here, before completion events, so the events carry the final status;
+	// retry is handled by the executeStep wrapper re-dispatching the step.
+	hookDecision := e.fireStepHooks(step, result)
+	switch hookDecision.Action {
+	case "skip":
+		result.Status = "skipped"
+		result.Error = fmt.Sprintf("skipped (hook: %s)", hookDecision.Reason)
+		result.EndTime = Now()
+	case "abort":
+		// Fail the step so the DAG stops (unless continue_on_error).
+		result.Status = "failed"
+		if result.Error != "" {
+			result.Error += "\n"
+		}
+		result.Error += fmt.Sprintf("aborted by hook: %s", hookDecision.Reason)
+		result.EndTime = Now()
+	}
 
 	// Send step_output event if there's output
 	if result.Output != "" {
@@ -1084,7 +1274,7 @@ errorRecovery:
 	// Send step_complete event
 	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, depth, parentID, result.ConditionResult)
 
-	return result
+	return result, hookDecision
 }
 
 // shouldAnalyzeError reports whether on_error: ai should fire for this step.
@@ -1130,8 +1320,11 @@ func (e *Executor) stepCommandForError(step Step) string {
 
 // fireStepHooks fires after_step hooks for a completed step. Both step-level
 // and workflow-level hooks are checked. The executor must have access to the
-// workflow's hooks (stored at Execute time).
-func (e *Executor) fireStepHooks(step Step, result StepResult) {
+// workflow's hooks (stored at Execute time). Returns the merged control-flow
+// decision of all fired hooks (ai_auto hooks only; other hook types return no
+// decision). When several hooks decide, the highest-priority action wins:
+// abort > retry > skip.
+func (e *Executor) fireStepHooks(step Step, result StepResult) HookResult {
 	event := HookEvent{
 		Phase:        HookAfterStep,
 		StepName:     step.Name,
@@ -1143,26 +1336,52 @@ func (e *Executor) fireStepHooks(step Step, result StepResult) {
 		WorkflowName: e.workflowName,
 		Variables:    e.context.Snapshot(),
 	}
+	decision := HookResult{}
 	// Step-level hooks.
 	for _, hook := range step.Hooks {
-		executeHook(hook, event, e)
+		decision = mergeHookDecision(decision, executeHook(hook, event, e))
 	}
 	// Workflow-level hooks (inherited).
 	for _, hook := range e.workflowHooks {
 		if hook.On == HookAfterStep {
-			executeHook(hook, event, e)
+			decision = mergeHookDecision(decision, executeHook(hook, event, e))
 		}
 	}
 	// Server-level global hooks.
 	for _, hook := range e.globalHooks {
 		if hook.On == HookAfterStep {
-			executeHook(hook, event, e)
+			decision = mergeHookDecision(decision, executeHook(hook, event, e))
 		}
 	}
+	return decision
 }
 
-// fireWorkflowHooks fires workflow_end hooks after the entire workflow completes.
-func (e *Executor) fireWorkflowHooks(wf *Workflow, result *WorkflowResult) {
+// mergeHookDecision picks the higher-priority of two hook decisions.
+func mergeHookDecision(cur, next HookResult) HookResult {
+	if hookActionPriority(next.Action) > hookActionPriority(cur.Action) {
+		return next
+	}
+	return cur
+}
+
+// hookActionPriority ranks control-flow actions: abort > retry > skip; ""
+// (no effect) and "suggest" (suggest-only mode) never affect control flow.
+func hookActionPriority(action string) int {
+	switch action {
+	case "abort":
+		return 3
+	case "retry":
+		return 2
+	case "skip":
+		return 1
+	}
+	return 0
+}
+
+// fireWorkflowHooks fires workflow_end hooks after the entire workflow
+// completes. Returns the merged control-flow decision; only "abort" is acted
+// upon by the caller.
+func (e *Executor) fireWorkflowHooks(wf *Workflow, result *WorkflowResult) HookResult {
 	event := HookEvent{
 		Phase:        HookWorkflowEnd,
 		WorkflowName: wf.Name,
@@ -1171,16 +1390,17 @@ func (e *Executor) fireWorkflowHooks(wf *Workflow, result *WorkflowResult) {
 		Output:       result.Error, // best context for end hooks
 		Variables:    result.Variables,
 	}
+	decision := HookResult{}
 	for _, hook := range wf.Hooks {
 		if hook.On == HookWorkflowEnd {
-			executeHook(hook, event, e)
+			decision = mergeHookDecision(decision, executeHook(hook, event, e))
 		}
 	}
 	// Server-level global hooks.
 	for _, hook := range e.globalHooks {
 		if hook.On == HookWorkflowEnd {
-			executeHook(hook, event, e)
+			decision = mergeHookDecision(decision, executeHook(hook, event, e))
 		}
 	}
+	return decision
 }
-

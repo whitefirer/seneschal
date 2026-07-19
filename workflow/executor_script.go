@@ -11,13 +11,13 @@ import (
 // langRuntimes maps a user-facing lang name to the actual interpreter command.
 // Adding a new language is just one line here.
 var langRuntimes = map[string]string{
-	"python":   "python3",
-	"python3":  "python3",
-	"node":     "node",
-	"nodejs":   "node",
-	"ruby":     "ruby",
-	"lua":      "lua",
-	"perl":     "perl",
+	"python":  "python3",
+	"python3": "python3",
+	"node":    "node",
+	"nodejs":  "node",
+	"ruby":    "ruby",
+	"lua":     "lua",
+	"perl":    "perl",
 }
 
 // scriptTimeout is the default timeout for script execution.
@@ -28,7 +28,9 @@ const scriptTimeout = "60s"
 // shell but with structured I/O and language-specific syntax.
 //
 // The script receives all workflow variables as a JSON object on stdin:
-//   {"key": "value", ...}
+//
+//	{"key": "value", ...}
+//
 // The script's stdout (first line, or full output) is stored via save_output.
 func (e *Executor) execScript(step Step) (string, error) {
 	cmd, ok := langRuntimes[strings.ToLower(step.Lang)]

@@ -409,28 +409,29 @@ func (a *Assistant) Modify(ctx context.Context, yamlContent, instruction string)
 	}
 	return modified, nil
 }
+
 // the fields the model needs to reason about an execution (status, output,
 // error, determinism). Callers convert from workflow.StepResult since ai
 // cannot import workflow.
 type ExecutionStepResult struct {
-	Name            string
-	Action          string
-	Status          string
-	Output          string
-	Error           string
-	Duration        string
+	Name             string
+	Action           string
+	Status           string
+	Output           string
+	Error            string
+	Duration         string
 	Nondeterministic bool
-	Children        []ExecutionStepResult
+	Children         []ExecutionStepResult
 }
 
 // ExecutionView is the assistant's view of a completed or in-progress
 // execution, for ExplainExecution / AnswerExecutionQuestion.
 type ExecutionView struct {
-	WorkflowName   string
-	Status         string
-	Error          string
-	Variables      map[string]string
-	Steps          []ExecutionStepResult
+	WorkflowName     string
+	Status           string
+	Error            string
+	Variables        map[string]string
+	Steps            []ExecutionStepResult
 	Nondeterministic bool
 }
 

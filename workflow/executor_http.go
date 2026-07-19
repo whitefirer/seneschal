@@ -102,4 +102,3 @@ func (e *Executor) execHTTP(step Step) (string, error) {
 
 	return output, nil
 }
-

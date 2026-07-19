@@ -65,36 +65,70 @@ func globMatch(pattern, name string) bool {
 	return true
 }
 
-// MaskStepResultVariables masks sensitive variables in a StepResult's output
-// and variables. This is called before serialization for display (HTML report,
-// history show, API response). The original StepResult is not modified.
-func MaskStepResultVariables(steps []StepResult, sensitivePatterns []string) {
-	if len(sensitivePatterns) == 0 {
+// MaskStepResultVariables masks sensitive values in a step result tree's
+// outputs, in place. vars is the execution variable set: entries whose names
+// match sensitivePatterns supply the values to mask. This is called on the
+// finalized WorkflowResult so stored snapshots / exports / API responses are
+// masked by construction. Real-time log streams during execution are NOT
+// masked (masking there would garble live output).
+func MaskStepResultVariables(steps []StepResult, sensitivePatterns []string, vars map[string]string) {
+	values := sensitiveValues(vars, sensitivePatterns)
+	if len(values) == 0 {
 		return
 	}
+	maskStepResultTree(steps, values)
+}
+
+// maskStepResultTree applies maskOutputStrings to every step in the tree
+// (children, then/else branches).
+func maskStepResultTree(steps []StepResult, values []string) {
 	for i := range steps {
-		maskOutputStrings(&steps[i], sensitivePatterns)
-		// Recurse into children.
+		maskOutputStrings(&steps[i], values)
 		if len(steps[i].Children) > 0 {
-			MaskStepResultVariables(steps[i].Children, sensitivePatterns)
+			maskStepResultTree(steps[i].Children, values)
 		}
 		if len(steps[i].ThenChildren) > 0 {
-			MaskStepResultVariables(steps[i].ThenChildren, sensitivePatterns)
+			maskStepResultTree(steps[i].ThenChildren, values)
 		}
 		if len(steps[i].ElseChildren) > 0 {
-			MaskStepResultVariables(steps[i].ElseChildren, sensitivePatterns)
+			maskStepResultTree(steps[i].ElseChildren, values)
 		}
 	}
 }
 
-// maskOutputStrings replaces known sensitive values in step output with ***.
-// This catches cases where a sensitive variable value appears in shell output.
-func maskOutputStrings(sr *StepResult, patterns []string) {
-	// We can't know which specific values are sensitive from the StepResult
-	// alone (the sensitive vars are on the Workflow, not the StepResult).
-	// The caller should pass the resolved sensitive variable values, but
-	// for now we only mask variables in WorkflowResult.Variables (done at
-	// the caller level). Step output masking is a future enhancement.
+// sensitiveValues returns the values of the variables whose names match the
+// sensitive patterns, longest first (so a longer secret is masked before any
+// shorter value that happens to be a substring of it). Empty and
+// single-character values are excluded — replacing such short strings would
+// mangle unrelated output.
+func sensitiveValues(vars map[string]string, patterns []string) []string {
+	var values []string
+	for name, v := range vars {
+		if len(v) < 2 {
+			continue
+		}
+		if isSensitiveVar(name, patterns) {
+			values = append(values, v)
+		}
+	}
+	for i := 1; i < len(values); i++ {
+		for j := i; j > 0 && len(values[j-1]) < len(values[j]); j-- {
+			values[j-1], values[j] = values[j], values[j-1]
+		}
+	}
+	return values
+}
+
+// maskOutputStrings replaces known sensitive values in a step's output with
+// "******". This catches cases where a sensitive variable value leaks into
+// shell/AI output. values carries the resolved sensitive variable values (see
+// sensitiveValues), already filtered and sorted.
+func maskOutputStrings(sr *StepResult, values []string) {
+	for _, v := range values {
+		if strings.Contains(sr.Output, v) {
+			sr.Output = strings.ReplaceAll(sr.Output, v, "******")
+		}
+	}
 }
 
 // MaskWorkflowResult applies variable masking to a WorkflowResult in place.

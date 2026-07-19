@@ -14,10 +14,10 @@ func Parse(data []byte) (*Workflow, error) {
 	if err := yaml.Unmarshal(data, &wf); err != nil {
 		return nil, fmt.Errorf("parse workflow YAML: %w", err)
 	}
-	
+
 	// Normalize If field to Expression (for backward compatibility)
 	wf.normalizeIfToExpression(wf.Steps)
-	
+
 	return &wf, nil
 }
 
@@ -95,6 +95,45 @@ func (wf *Workflow) Validate() []error {
 		stepErrs := ValidateStep(step, i)
 		errs = append(errs, stepErrs...)
 	}
+	errs = append(errs, validateUniqueStepIDs(wf.Steps)...)
+	return errs
+}
+
+// validateUniqueStepIDs walks the full step tree (including nested container
+// children) and reports duplicate effective step IDs. The effective ID is
+// step.ID, falling back to step.Name — the same derivation buildDAGGraph and
+// buildStepMapRecursive use. Duplicates previously silently overwrote each
+// other in those maps, corrupting dependency inference and step lookup.
+func validateUniqueStepIDs(steps []Step) []error {
+	var errs []error
+	seen := make(map[string]string) // effective ID -> first location
+	var walk func(steps []Step, path string)
+	walk = func(steps []Step, path string) {
+		for i, step := range steps {
+			loc := fmt.Sprintf("%s[%d] (%s)", path, i, step.Name)
+			id := step.ID
+			if id == "" {
+				id = step.Name
+			}
+			if id != "" {
+				if first, dup := seen[id]; dup {
+					errs = append(errs, fmt.Errorf("duplicate step id %q: %s and %s — step names/ids must be unique across the workflow", id, first, loc))
+				} else {
+					seen[id] = loc
+				}
+			}
+			switch step.Action {
+			case "condition":
+				walk(step.Then, loc+".then")
+				walk(step.Else, loc+".else")
+			case "parallel":
+				walk(step.Steps, loc+".steps")
+			case "foreach", "loop":
+				walk(step.Do, loc+".do")
+			}
+		}
+	}
+	walk(steps, "steps")
 	return errs
 }
 
@@ -212,21 +251,21 @@ func (wf *Workflow) PrintWorkflow(w io.Writer) error {
 func (wf *Workflow) InferDependencies() error {
 	// 1. 递归填充运行时元数据
 	wf.fillRuntimeMetadata(wf.Steps, "", "", 0)
-	
+
 	// 2. 主流程相邻节点推断（线性流程）
 	wf.inferLinearDependencies(wf.Steps)
-	
+
 	// 3. next → depends_on 反向推断（全局）
 	wf.inferNextToDependsOnGlobal(wf.Steps)
-	
+
 	// 4. 容器内子节点推断（递归）
 	wf.inferContainerDependenciesRecursive(wf.Steps)
-	
+
 	// 5. 验证依赖关系合法性
 	if err := wf.ValidateDependencies(); err != nil {
 		return err
 	}
-	
+
 	return nil
 }
 
@@ -237,7 +276,7 @@ func (wf *Workflow) fillRuntimeMetadata(steps []Step, parentId, branchType strin
 		step.ParentId = parentId
 		step.BranchType = branchType
 		step.BranchIndex = startIndex + i
-		
+
 		// 递归处理子节点
 		if step.Action == "condition" {
 			wf.fillRuntimeMetadata(step.Then, step.Name, "then", 0)
@@ -256,7 +295,7 @@ func (wf *Workflow) inferLinearDependencies(steps []Step) {
 		for i := 0; i < len(steps)-1; i++ {
 			current := &steps[i]
 			next := &steps[i+1]
-			
+
 			// 如果没有显式 next，添加后继
 			if len(current.Next) == 0 {
 				currentId := getStepId(current)
@@ -265,7 +304,7 @@ func (wf *Workflow) inferLinearDependencies(steps []Step) {
 					current.Next = []string{nextId}
 				}
 			}
-			
+
 			// 如果没有显式 depends_on，添加前驱
 			if len(next.DependsOn) == 0 {
 				currentId := getStepId(current)
@@ -275,7 +314,7 @@ func (wf *Workflow) inferLinearDependencies(steps []Step) {
 			}
 		}
 	}
-	
+
 	// 递归处理容器子节点
 	for i := range steps {
 		step := &steps[i]
@@ -303,7 +342,7 @@ func (wf *Workflow) inferNextToDependsOnGlobal(steps []Step) {
 	// 构建全局映射
 	stepMap := make(map[string]*Step)
 	wf.buildStepMapRecursive(steps, stepMap)
-	
+
 	// 遍历所有 next，添加反向 depends_on
 	for _, step := range steps {
 		for _, nextID := range step.Next {
@@ -349,7 +388,7 @@ func (wf *Workflow) buildStepMapRecursive(steps []Step, stepMap map[string]*Step
 func (wf *Workflow) inferContainerDependenciesRecursive(steps []Step) {
 	for i := range steps {
 		step := &steps[i]
-		
+
 		// 处理 condition.then/else
 		if step.Action == "condition" {
 			// Then 分支：子节点之间链式依赖
@@ -433,9 +472,6 @@ func (wf *Workflow) inferContainerDependenciesRecursive(steps []Step) {
 	}
 }
 
-
-
-
 // ValidateDependencies 验证依赖关系的合法性
 // 规则：
 // 1. 子节点不能依赖外部节点（跨层依赖）
@@ -445,7 +481,7 @@ func (wf *Workflow) inferContainerDependenciesRecursive(steps []Step) {
 func (wf *Workflow) ValidateDependencies() error {
 	stepMap := make(map[string]*Step)
 	wf.buildStepMapRecursive(wf.Steps, stepMap)
-	
+
 	for _, step := range stepMap {
 		// 验证 depends_on
 		for _, depId := range step.DependsOn {
@@ -453,7 +489,7 @@ func (wf *Workflow) ValidateDependencies() error {
 			if !ok {
 				continue // 依赖的节点不存在，会在执行时报错
 			}
-			
+
 			// 规则 1 & 2: 检查跨层依赖（但允许子节点依赖父节点）
 			if !wf.isSameLayer(step, depStep) {
 				// 检查是否是子节点依赖父节点（合法）
@@ -461,13 +497,13 @@ func (wf *Workflow) ValidateDependencies() error {
 					// 合法：子节点依赖父容器
 					continue
 				}
-				return fmt.Errorf("cross-layer dependency detected: %q depends on %q (different layers)", 
+				return fmt.Errorf("cross-layer dependency detected: %q depends on %q (different layers)",
 					getStepId(step), getStepId(depStep))
 			}
-			
+
 			// 规则 3: 检查跨分支依赖
 			if !wf.isSameBranch(step, depStep) {
-				return fmt.Errorf("cross-branch dependency detected: %q depends on %q (different branches)", 
+				return fmt.Errorf("cross-branch dependency detected: %q depends on %q (different branches)",
 					getStepId(step), getStepId(depStep))
 			}
 		}

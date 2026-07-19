@@ -17,15 +17,15 @@ import (
 type HookPhase string
 
 const (
-	HookAfterStep    HookPhase = "after_step"
-	HookWorkflowEnd  HookPhase = "workflow_end"
+	HookAfterStep   HookPhase = "after_step"
+	HookWorkflowEnd HookPhase = "workflow_end"
 )
 
 // HookConfig is a single hook declaration from YAML.
 type HookConfig struct {
-	On      HookPhase `yaml:"on"`               // after_step | workflow_end
-	When    string    `yaml:"when,omitempty"`   // success | failed | always (default)
-	Type    string    `yaml:"type"`             // webhook | shell | ai
+	On      HookPhase `yaml:"on"`                // after_step | workflow_end
+	When    string    `yaml:"when,omitempty"`    // success | failed | always (default)
+	Type    string    `yaml:"type"`              // webhook | shell | ai
 	URL     string    `yaml:"url,omitempty"`     // webhook: target URL
 	Message string    `yaml:"message,omitempty"` // webhook: optional message template
 	Command string    `yaml:"command,omitempty"` // shell: command to run
@@ -147,7 +147,8 @@ func fireAIHook(hook HookConfig, event HookEvent, e *Executor) HookResult {
 		return HookResult{Action: "suggest", Reason: "no AI provider configured"}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	// Derived from the execution context so a canceled run aborts the call.
+	ctx, cancel := context.WithTimeout(e.executionContext(), 120*time.Second)
 	defer cancel()
 
 	mode := hook.Mode
