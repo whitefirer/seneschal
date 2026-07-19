@@ -15,6 +15,7 @@ import (
 
 	"github.com/whitefirer/seneschal/workflow"
 	"github.com/whitefirer/seneschal/workflow/ai"
+	"gopkg.in/yaml.v3"
 )
 
 const banner = `
@@ -321,10 +322,10 @@ func cmdCreate(args []string) {
 	})
 
 	wf.AddStep(workflow.Step{
-		Name:        "done",
-		Action:      "log",
-		Message:     "Workflow completed successfully!",
-		Level:       "info",
+		Name:    "done",
+		Action:  "log",
+		Message: "Workflow completed successfully!",
+		Level:   "info",
 	})
 
 	// Save
@@ -810,10 +811,11 @@ func cmdReplay(args []string) {
 
 // cmdHistory manages execution history: list, show, purge, delete.
 // Usage:
-//   seneschal history list [--dir DIR]
-//   seneschal history show <id> [--dir DIR]
-//   seneschal history purge [--dir DIR] [--keep N]
-//   seneschal history delete <id> [--dir DIR]
+//
+//	seneschal history list [--dir DIR]
+//	seneschal history show <id> [--dir DIR]
+//	seneschal history purge [--dir DIR] [--keep N]
+//	seneschal history delete <id> [--dir DIR]
 func cmdHistory(args []string) {
 	if len(args) == 0 {
 		fmt.Println(`Usage:
@@ -1235,36 +1237,37 @@ func runbookCreate(name string, args []string, dir string) {
 		os.Exit(1)
 	}
 
-	// Build runbook YAML.
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "name: %s\n", name)
-	fmt.Fprintf(&sb, "workflow: %s\n", wfFile)
-	fmt.Fprintf(&sb, "triggers:\n")
-	fmt.Fprintf(&sb, "  - type: manual\n")
+	// Build runbook YAML via the yaml package so values are properly quoted/
+	// escaped (hand-written Fprintf output broke on values containing ':',
+	// '#', leading spaces, etc.).
+	triggers := []workflow.TriggerConfig{{Type: workflow.TriggerManual}}
 	if cron != "" {
-		fmt.Fprintf(&sb, "  - type: cron\n")
-		fmt.Fprintf(&sb, "    cron: \"%s\"\n", cron)
+		triggers = append(triggers, workflow.TriggerConfig{Type: workflow.TriggerCron, Cron: cron})
 	}
 	if webhookPath != "" {
-		fmt.Fprintf(&sb, "  - type: webhook\n")
-		fmt.Fprintf(&sb, "    path: \"%s\"\n", webhookPath)
+		triggers = append(triggers, workflow.TriggerConfig{Type: workflow.TriggerWebhook, Path: webhookPath})
 	}
-	if len(vars) > 0 {
-		fmt.Fprintf(&sb, "variables:\n")
-		for k, v := range vars {
-			fmt.Fprintf(&sb, "  %s: %s\n", k, v)
-		}
+	rb := workflow.RunbookConfig{
+		Name:      name,
+		Workflow:  wfFile,
+		Triggers:  triggers,
+		Variables: vars,
+	}
+	data, err := yaml.Marshal(rb)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: marshal runbook: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Write file.
 	os.MkdirAll(dir, 0755)
 	path := filepath.Join(dir, name+".yaml")
-	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+	if err := os.WriteFile(path, data, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Created runbook: %s\n", path)
-	fmt.Println(sb.String())
+	fmt.Println(string(data))
 }
 
 func formatTriggers(triggers []workflow.TriggerConfig) string {
@@ -1320,35 +1323,10 @@ func cmdEdit(args []string) {
 		os.Exit(1)
 	}
 
-	// Try to open in default editor
-	editors := []string{
-		"code",
-		"notepad",
-		"vim",
-		"nano",
-	}
-
-	editor := ""
-	for _, e := range editors {
-		if _, err := os.Stat(filePath); err == nil {
-			// Check if editor exists
-			_, err := os.Stat(e)
-			if err == nil {
-				editor = e
-				break
-			}
-		}
-	}
-
-	if editor != "" {
-		fmt.Printf("Opening %s with %s...\n", filePath, editor)
-		// We can't actually run the editor from here, but we can show instructions
-		fmt.Println("Edit the YAML file, save it, then run the workflow again to see changes.")
-	} else {
-		fmt.Printf("📝 File: %s\n", filePath)
-		fmt.Println("Edit this file to change workflow behavior. After editing, run:")
-		fmt.Printf("  seneschal run %s --verbose\n", filePath)
-	}
+	// We don't launch an editor from here; just point the user at the file.
+	fmt.Printf("📝 File: %s\n", filePath)
+	fmt.Println("Edit this file to change workflow behavior. After editing, run:")
+	fmt.Printf("  seneschal run %s --verbose\n", filePath)
 }
 
 func cmdTemplate(args []string) {
