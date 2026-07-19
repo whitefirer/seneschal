@@ -31,13 +31,17 @@ type Handler struct {
 	upgrader     websocket.Upgrader
 	executions   map[string]*ExecutionDetail
 	execMu       sync.RWMutex
-	aiConfig     workflow.AIConfig    // server-level AI config
+	aiConfig     workflow.AIConfig     // server-level AI config
 	globalHooks  []workflow.HookConfig // server-level hooks (applied to all workflows)
 }
 
 // maxInMemoryExecutions caps the in-memory execution cache. Older entries are
 // evicted (but remain on disk) to bound memory use in long-running servers.
 const maxInMemoryExecutions = 100
+
+// maxRequestBodyBytes caps request bodies on write endpoints (save/run/chat/
+// runbook save) to 1 MiB so a rogue client cannot exhaust server memory.
+const maxRequestBodyBytes = 1 << 20
 
 // NewHandler creates a new API handler. store may be nil to disable
 // persistence (history lives only in memory, lost on restart). aiCfg carries
@@ -142,15 +146,26 @@ func writeJSON(w http.ResponseWriter, status int, resp APIResponse) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// safePath resolves a workflow name to an absolute path inside the workflows
-// directory. It rejects path-traversal attempts (e.g. ".." or absolute paths)
-// that would escape the directory, and normalizes the .yaml/.yml suffix.
+// safeJoin resolves a user-supplied file name to an absolute path inside
+// base. It rejects path-traversal attempts (e.g. ".." segments that would
+// escape base) and normalizes the .yaml/.yml suffix.
 //
 // On success it returns the safe absolute path and the normalized file name
 // (e.g. "deploy.yaml"). On failure it returns a non-nil error.
-func (h *Handler) safePath(name string) (absPath, fileName string, err error) {
+func safeJoin(base, name string) (absPath, fileName string, err error) {
 	if name == "" {
-		return "", "", fmt.Errorf("workflow name required")
+		return "", "", fmt.Errorf("name required")
+	}
+	if filepath.IsAbs(name) {
+		return "", "", fmt.Errorf("invalid name: absolute paths are not allowed")
+	}
+	// Reject parent-dir segments outright. The Clean+prefix check below would
+	// collapse them into a harmless in-base name, but silently rewriting a
+	// traversal attempt into a valid file is worse than failing loudly.
+	for _, seg := range strings.Split(name, "/") {
+		if seg == ".." {
+			return "", "", fmt.Errorf("invalid name: parent directory references are not allowed")
+		}
 	}
 
 	// Normalize the suffix early so the containment check sees the final name.
@@ -161,18 +176,25 @@ func (h *Handler) safePath(name string) (absPath, fileName string, err error) {
 	// Prefix with "/" so filepath.Clean interprets the name as rooted; this
 	// collapses any embedded ".." segments before we join it onto the dir.
 	cleaned := filepath.Clean("/" + name)
-	abs := filepath.Join(h.workflowsDir, cleaned)
+	abs := filepath.Join(base, cleaned)
 
-	// Containment check: the resolved path must stay within workflowsDir.
-	dir := h.workflowsDir
+	// Containment check (defense in depth): the resolved path must stay
+	// within base.
+	dir := base
 	if !strings.HasSuffix(dir, string(os.PathSeparator)) {
 		dir += string(os.PathSeparator)
 	}
 	if !strings.HasPrefix(abs+string(os.PathSeparator), dir) {
-		return "", "", fmt.Errorf("invalid workflow name")
+		return "", "", fmt.Errorf("invalid name: path escapes its base directory")
 	}
 
 	return abs, name, nil
+}
+
+// safePath resolves a workflow name to an absolute path inside the workflows
+// directory. See safeJoin.
+func (h *Handler) safePath(name string) (absPath, fileName string, err error) {
+	return safeJoin(h.workflowsDir, name)
 }
 
 // ListWorkflows returns a list of all workflows
@@ -268,9 +290,10 @@ func (h *Handler) SaveWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	name := mux.Vars(r)["name"]
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResp("Invalid request body"))
+		writeJSON(w, http.StatusBadRequest, errorResp("Invalid request body (too large?)"))
 		return
 	}
 	defer r.Body.Close()
@@ -363,12 +386,15 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 
 	// Parse request body
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	var req RunRequest
 	if r.Body != nil {
 		body, err := io.ReadAll(r.Body)
-		if err == nil {
-			json.Unmarshal(body, &req)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errorResp("Request body too large"))
+			return
 		}
+		json.Unmarshal(body, &req)
 	}
 
 	path, _, err := h.safePath(name)
@@ -396,7 +422,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create execution record with pre-populated steps (including nested children)
-	
+
 	// Helper function to update step status recursively
 	var updateStepStatus func(steps []workflow.StepResult, stepID string, event workflow.ProgressEvent) bool
 	updateStepStatus = func(steps []workflow.StepResult, stepID string, event workflow.ProgressEvent) bool {
@@ -450,9 +476,9 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 				if steps[i].Action == "foreach" || steps[i].Action == "loop" {
 					if event.Type == "step_start" {
 						// Check if template child exists and should be replaced
-						hasTemplate := len(steps[i].Children) == 1 && 
+						hasTemplate := len(steps[i].Children) == 1 &&
 							strings.HasSuffix(steps[i].Children[0].ID, "-template")
-						
+
 						newChild := workflow.StepResult{
 							ID:        stepID,
 							Name:      event.Name,
@@ -460,7 +486,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 							Status:    "running",
 							StartTime: event.Time,
 						}
-						
+
 						if hasTemplate {
 							// Replace template with first iteration
 							steps[i].Children = []workflow.StepResult{newChild}
@@ -496,7 +522,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		}
 		return false
 	}
-	
+
 	var buildSteps func(steps []workflow.Step, parentId string) []workflow.StepResult
 	buildSteps = func(steps []workflow.Step, parentId string) []workflow.StepResult {
 		result := make([]workflow.StepResult, 0, len(steps))
@@ -510,7 +536,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					stepID = fmt.Sprintf("%s-child-%d", parentId, i)
 				}
 			}
-			
+
 			step := workflow.StepResult{
 				ID:          stepID,
 				Name:        s.Name,
@@ -560,9 +586,9 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		}
 		return result
 	}
-	
+
 	steps := buildSteps(wf.Steps, "")
-	
+
 	exec := &ExecutionDetail{
 		ExecutionRecord: ExecutionRecord{
 			ID:           executionID,
@@ -758,7 +784,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 				}
 
 				if sr.ID != "" {
-					ex.ID = sr.ID  // Update ID (important for foreach iterations)
+					ex.ID = sr.ID // Update ID (important for foreach iterations)
 				}
 				ex.Status = sr.Status
 				ex.StartTime = sr.StartTime
@@ -793,9 +819,13 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 							if sID == "" && s.Name != "" {
 								sID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(s.Name, " ", "-")))
 							}
-							if sID == key || s.Name == key { return s }
+							if sID == key || s.Name == key {
+								return s
+							}
 							for _, children := range [][]workflow.Step{s.Steps, s.Do, s.Then, s.Else} {
-								if d := findStepDef(children, key); d != nil { return d }
+								if d := findStepDef(children, key); d != nil {
+									return d
+								}
 							}
 						}
 						return nil
@@ -804,12 +834,16 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					allowedNames := make(map[string]bool)
 					if def != nil {
 						if def.Action == "foreach" || def.Action == "loop" {
-							for _, doStep := range def.Do { allowedNames[doStep.Name] = true }
+							for _, doStep := range def.Do {
+								allowedNames[doStep.Name] = true
+							}
 						} else if def.Action == "parallel" {
-							for _, pStep := range def.Steps { allowedNames[pStep.Name] = true }
+							for _, pStep := range def.Steps {
+								allowedNames[pStep.Name] = true
+							}
 						}
 					}
-					
+
 					if len(allowedNames) > 0 {
 						filteredChildren := make([]workflow.StepResult, 0, len(sr.Children))
 						for _, child := range sr.Children {
@@ -842,7 +876,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			
+
 			// Build a map of all results for quick lookup
 			resultMap := make(map[string]workflow.StepResult)
 			var buildResultMap func(steps []workflow.StepResult)
@@ -869,7 +903,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			buildResultMap(apiSteps)
-			
+
 			// Now recursively update existing tree using the result map
 			var updateTree func(existing []workflow.StepResult, wfSteps []workflow.Step)
 			updateTree = func(existing []workflow.StepResult, wfSteps []workflow.Step) {
@@ -911,7 +945,7 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			
+
 			updateTree(e.Steps, wf.Steps)
 
 			// Calculate duration
@@ -1040,8 +1074,14 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Deep-copy under the read lock: the executor goroutine keeps mutating the
+	// cached ExecutionDetail (logs, status, step tree) while we serialize it,
+	// so handing the shared pointer to the JSON encoder would be a data race.
 	h.execMu.RLock()
 	exec, ok := h.executions[id]
+	if ok {
+		exec = exec.deepCopy()
+	}
 	h.execMu.RUnlock()
 	if !ok {
 		// Fall back to the store for evicted / pre-restart history.
@@ -1056,6 +1096,46 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, success(exec))
+}
+
+// deepCopy returns an independent copy of the ExecutionDetail that shares no
+// mutable memory with the original, safe to use after the lock is released.
+func (e *ExecutionDetail) deepCopy() *ExecutionDetail {
+	cp := &ExecutionDetail{
+		ExecutionRecord: e.ExecutionRecord,
+		Logs:            make([]LogEntry, len(e.Logs)),
+		Steps:           deepCopySteps(e.Steps),
+		Workflow:        e.Workflow,
+	}
+	copy(cp.Logs, e.Logs)
+	return cp
+}
+
+// deepCopySteps recursively copies a step-result tree — children, condition
+// branches, and the slice/pointer fields — so the result shares no mutable
+// memory with the original.
+func deepCopySteps(steps []workflow.StepResult) []workflow.StepResult {
+	if steps == nil {
+		return nil
+	}
+	out := make([]workflow.StepResult, len(steps))
+	for i, s := range steps {
+		out[i] = s
+		out[i].Children = deepCopySteps(s.Children)
+		out[i].ThenChildren = deepCopySteps(s.ThenChildren)
+		out[i].ElseChildren = deepCopySteps(s.ElseChildren)
+		if s.Next != nil {
+			out[i].Next = append([]string(nil), s.Next...)
+		}
+		if s.DependsOn != nil {
+			out[i].DependsOn = append([]string(nil), s.DependsOn...)
+		}
+		if s.ConditionResult != nil {
+			v := *s.ConditionResult
+			out[i].ConditionResult = &v
+		}
+	}
+	return out
 }
 
 // ReplayExecution re-runs a historical execution: deterministic steps reuse
@@ -1156,7 +1236,7 @@ func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
 		// Log the reuse/re-exec summary via a WS event for visibility.
 		h.hub.Broadcast(WSProgressEvent{
 			Type: "step_output", ExecutionID: replayID,
-			Output:   fmt.Sprintf("replay: %d reused, %d re-executed", hits, misses),
+			Output:    fmt.Sprintf("replay: %d reused, %d re-executed", hits, misses),
 			Timestamp: workflow.Now(),
 		})
 	}()

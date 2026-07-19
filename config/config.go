@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
@@ -15,22 +14,28 @@ type ServerConfig struct {
 	// Host is the bind address. Defaults to "127.0.0.1" so the server is only
 	// reachable locally; set to "0.0.0.0" explicitly to expose it (make sure
 	// you understand the security implications — see ARCHITECTURE.md).
-	Host           string   `yaml:"host"`
-	Port           string   `yaml:"port"`
-	WorkflowsDir   string   `yaml:"workflows_dir"`
+	Host         string `yaml:"host"`
+	Port         string `yaml:"port"`
+	WorkflowsDir string `yaml:"workflows_dir"`
 	// ExecutionsDir is where execution history snapshots are persisted.
 	// Defaults to "./executions". Contains potentially sensitive data and is
 	// gitignored — do not commit this directory.
-	ExecutionsDir  string   `yaml:"executions_dir"`
+	ExecutionsDir string `yaml:"executions_dir"`
 	// RunbooksDir is where runbook (trigger/schedule) files live.
 	// Defaults to "./runbooks". Hot-reloaded by the server.
 	RunbooksDir    string   `yaml:"runbooks_dir"`
 	AllowedOrigins []string `yaml:"allowed_origins"`
+	// AuthToken, when non-empty, protects all /api/ endpoints with Bearer-token
+	// auth (`Authorization: Bearer <token>`; /api/ws also accepts ?token= for
+	// browser WebSocket clients, which cannot set headers). Leave empty to
+	// disable auth — acceptable only on a loopback bind; the server logs a
+	// loud warning at startup when binding non-loopback without a token.
+	AuthToken string `yaml:"auth_token"`
 	// AI is the server-level AI configuration. Serves as the global default
 	// for all workflows; a workflow's ai: block overrides per-workflow, and
 	// step.model overrides per-step. API key still comes from environment
 	// variables only (never written to YAML).
-	AI AIConfig    `yaml:"ai,omitempty"`
+	AI AIConfig `yaml:"ai,omitempty"`
 	// Hooks are server-level lifecycle hooks applied to ALL workflows.
 	// Individual workflows and steps can add their own; all three levels merge.
 	Hooks []HookConfig `yaml:"hooks,omitempty"`
@@ -104,64 +109,64 @@ func Load(path string) (*ServerConfig, error) {
 	return cfg, nil
 }
 
-// CheckOrigin returns an origin checker for the config's allowed origins.
-// An empty list means all origins are allowed.
+// CheckOrigin returns an origin checker for the WebSocket upgrader.
+//
+// Policy:
+//   - AllowedOrigins empty: allow everything, including requests with no
+//     Origin header. This exists for non-browser clients (curl, wscat,
+//     server-to-server) that send no Origin header — do not use it on an
+//     exposed interface.
+//   - Otherwise the request's Origin must exactly match a whitelist entry
+//     (full scheme://host:port equality, port included). Requests without an
+//     Origin header are rejected; browsers always send Origin on WS upgrades.
 func (c *ServerConfig) CheckOrigin() func(r *http.Request) bool {
 	if len(c.AllowedOrigins) == 0 {
 		return func(r *http.Request) bool { return true }
 	}
 
 	return func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true
-		}
-		for _, allowed := range c.AllowedOrigins {
-			if origin == allowed {
-				return true
-			}
-			// Also match scheme+hostname (ignore port differences)
-			u, err := url.Parse(origin)
-			if err != nil {
-				continue
-			}
-			a, err := url.Parse(allowed)
-			if err != nil {
-				continue
-			}
-			if u.Scheme == a.Scheme && u.Hostname() == a.Hostname() {
-				return true
-			}
-		}
-		return false
+		return c.OriginAllowed(r.Header.Get("Origin"))
 	}
 }
 
-// PortFlag parses --port from os.Args. Returns "" if not set.
+// OriginAllowed reports whether origin exactly matches one of the configured
+// AllowedOrigins entries (scheme://host:port — no wildcard, no port folding).
+func (c *ServerConfig) OriginAllowed(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	for _, allowed := range c.AllowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// PortFlag parses --port from os.Args (both "--port 8888" and "--port=8888"
+// forms). Returns "" if not set.
 func PortFlag() string {
 	for i, a := range os.Args {
 		if a == "--port" && i+1 < len(os.Args) {
-			parts := strings.SplitN(os.Args[i+1], "=", 2)
-			if len(parts) == 2 {
-				return parts[1]
-			}
 			return os.Args[i+1]
+		}
+		if strings.HasPrefix(a, "--port=") {
+			return strings.TrimPrefix(a, "--port=")
 		}
 	}
 	return ""
 }
 
-// HostFlag parses --host from os.Args. Returns "" if not set. Lets the
-// bind address be overridden on the command line (e.g. by dev-dash) without
-// relying on server.yaml.
+// HostFlag parses --host from os.Args (both "--host X" and "--host=X" forms).
+// Returns "" if not set. Lets the bind address be overridden on the command
+// line (e.g. by dev-dash) without relying on server.yaml.
 func HostFlag() string {
 	for i, a := range os.Args {
 		if a == "--host" && i+1 < len(os.Args) {
-			parts := strings.SplitN(os.Args[i+1], "=", 2)
-			if len(parts) == 2 {
-				return parts[1]
-			}
 			return os.Args[i+1]
+		}
+		if strings.HasPrefix(a, "--host=") {
+			return strings.TrimPrefix(a, "--host=")
 		}
 	}
 	return ""

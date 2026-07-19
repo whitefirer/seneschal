@@ -112,6 +112,11 @@ func (h *Handler) AskExecution(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) loadExecutionView(id string) (ai.ExecutionView, error) {
 	h.execMu.RLock()
 	detail, ok := h.executions[id]
+	if ok {
+		// Copy under the lock: the executor goroutine may still be mutating
+		// the shared detail (same race as in GetExecution).
+		detail = detail.deepCopy()
+	}
 	h.execMu.RUnlock()
 
 	if ok {
@@ -129,11 +134,11 @@ func (h *Handler) loadExecutionView(id string) (ai.ExecutionView, error) {
 
 func detailToView(d *ExecutionDetail) ai.ExecutionView {
 	return ai.ExecutionView{
-		WorkflowName:   d.WorkflowName,
-		Status:         d.Status,
-		Error:          d.Error,
-		Variables:      nil, // detail doesn't carry resolved vars; available in snapshot
-		Steps:          convertStepsToView(d.Steps),
+		WorkflowName:     d.WorkflowName,
+		Status:           d.Status,
+		Error:            d.Error,
+		Variables:        nil, // detail doesn't carry resolved vars; available in snapshot
+		Steps:            convertStepsToView(d.Steps),
 		Nondeterministic: false,
 	}
 }
@@ -153,14 +158,14 @@ func convertStepsToView(steps []workflow.StepResult) []ai.ExecutionStepResult {
 	out := make([]ai.ExecutionStepResult, 0, len(steps))
 	for _, s := range steps {
 		out = append(out, ai.ExecutionStepResult{
-			Name:            s.Name,
-			Action:          s.Action,
-			Status:          s.Status,
-			Output:          s.Output,
-			Error:           s.Error,
-			Duration:        s.Duration,
+			Name:             s.Name,
+			Action:           s.Action,
+			Status:           s.Status,
+			Output:           s.Output,
+			Error:            s.Error,
+			Duration:         s.Duration,
 			Nondeterministic: s.Nondeterministic,
-			Children:        convertStepsToView(s.Children),
+			Children:         convertStepsToView(s.Children),
 		})
 	}
 	return out

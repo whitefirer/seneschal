@@ -82,14 +82,16 @@ func (h *RunbookHandler) TriggerByPath(w http.ResponseWriter, r *http.Request) {
 // SaveRunbook PUT /api/runbooks/{name}
 func (h *RunbookHandler) SaveRunbook(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
-	body, err := io.ReadAll(r.Body)
+	path, _, err := safeJoin(h.runbooksDir, name)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, errorResp("invalid body"))
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
-	path := filepath.Join(h.runbooksDir, name)
-	if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
-		path += ".yaml"
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp("invalid or too large body"))
+		return
 	}
 	os.MkdirAll(h.runbooksDir, 0755)
 	if err := os.WriteFile(path, body, 0644); err != nil {
@@ -104,9 +106,10 @@ func (h *RunbookHandler) SaveRunbook(w http.ResponseWriter, r *http.Request) {
 // DeleteRunbook DELETE /api/runbooks/{name}
 func (h *RunbookHandler) DeleteRunbook(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
-	path := filepath.Join(h.runbooksDir, name)
-	if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".yml") {
-		path += ".yaml"
+	path, _, err := safeJoin(h.runbooksDir, name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
+		return
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
@@ -165,12 +168,12 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 				execID := fmt.Sprintf("runbook-%s-%d", rb.Name, os.Getpid())
 				_ = store.Save(workflow.ExecutionSnapshot{
 					ExecutionSummary: workflow.ExecutionSummary{
-						ID:             execID,
-						WorkflowName:   wf.Name,
-						Status:         result.Status,
-						StartTime:      result.StartTime,
-						EndTime:        result.EndTime,
-						StepsCount:     len(wf.Steps),
+						ID:           execID,
+						WorkflowName: wf.Name,
+						Status:       result.Status,
+						StartTime:    result.StartTime,
+						EndTime:      result.EndTime,
+						StepsCount:   len(wf.Steps),
 					},
 					Steps:     result.Steps,
 					Variables: result.Variables,
@@ -181,23 +184,32 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 	}
 }
 
+// resolveWorkflowPath resolves a runbook's workflow reference. The path must
+// be relative and must stay inside the workflows directory — absolute paths
+// and ".." escapes are rejected so a runbook cannot make the server execute
+// arbitrary YAML files from anywhere on disk.
 func resolveWorkflowPath(rb *workflow.RunbookConfig, workflowsDir string) (string, error) {
-	// Try absolute first.
+	if rb.Workflow == "" {
+		return "", fmt.Errorf("workflow path is empty")
+	}
 	if filepath.IsAbs(rb.Workflow) {
-		if _, err := os.Stat(rb.Workflow); err == nil {
-			return rb.Workflow, nil
-		}
+		return "", fmt.Errorf("absolute workflow paths are not allowed: %s", rb.Workflow)
 	}
-	// Try relative to cwd.
-	if _, err := os.Stat(rb.Workflow); err == nil {
-		return rb.Workflow, nil
+	// Root the path at "/" before cleaning so ".." segments collapse instead
+	// of escaping, then join onto the workflows dir and verify containment.
+	cleaned := filepath.Clean("/" + rb.Workflow)
+	candidate := filepath.Join(workflowsDir, cleaned)
+	dir := workflowsDir
+	if !strings.HasSuffix(dir, string(os.PathSeparator)) {
+		dir += string(os.PathSeparator)
 	}
-	// Try relative to workflows dir.
-	candidate := filepath.Join(workflowsDir, rb.Workflow)
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate, nil
+	if !strings.HasPrefix(candidate+string(os.PathSeparator), dir) {
+		return "", fmt.Errorf("workflow path escapes the workflows directory: %s", rb.Workflow)
 	}
-	return "", fmt.Errorf("workflow file not found: %s", rb.Workflow)
+	if _, err := os.Stat(candidate); err != nil {
+		return "", fmt.Errorf("workflow file not found: %s", rb.Workflow)
+	}
+	return candidate, nil
 }
 
 func workflowYAML(path string) []byte {

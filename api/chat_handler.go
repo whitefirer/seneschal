@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req ChatRequest
 	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, errorResp("invalid request body"))
 			return
@@ -32,6 +34,15 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Message == "" {
 		writeJSON(w, http.StatusBadRequest, errorResp("message is required"))
+		return
+	}
+
+	// Validate the requested workflow directory before doing any work: a
+	// client-supplied dir could otherwise point the registry (and run_workflow)
+	// at arbitrary directories like /etc.
+	dir, err := resolveChatDir(h.workflowsDir, req.Dir)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
 
@@ -57,11 +68,6 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	assistant := ai.NewAssistant(provider)
-
-	dir := req.Dir
-	if dir == "" {
-		dir = h.workflowsDir
-	}
 
 	// SSE setup.
 	flusher, ok := w.(http.Flusher)
@@ -146,6 +152,30 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil && ctx.Err() == nil {
 		sendEvent("error", map[string]string{"error": err.Error()})
 	}
+}
+
+// resolveChatDir validates the optional ChatRequest.Dir. An empty dir selects
+// the server's workflows dir; anything else must resolve to the workflows dir
+// itself or one of its subdirectories — otherwise the chat agent could list
+// and execute YAML files from anywhere on disk (e.g. {"dir": "/etc"}).
+func resolveChatDir(workflowsDir, dir string) (string, error) {
+	base, err := filepath.Abs(workflowsDir)
+	if err != nil {
+		return "", fmt.Errorf("invalid workflows dir")
+	}
+	base = filepath.Clean(base)
+	if dir == "" {
+		return base, nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("invalid dir: %s", dir)
+	}
+	abs = filepath.Clean(abs)
+	if abs != base && !strings.HasPrefix(abs, base+string(os.PathSeparator)) {
+		return "", fmt.Errorf("dir must be the workflows directory or a subdirectory of it")
+	}
+	return abs, nil
 }
 
 // chatToolExecutor implements ai.ToolExecutor for the chat handler.
@@ -269,13 +299,13 @@ func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (stri
 		}
 		snap := workflow.ExecutionSnapshot{
 			ExecutionSummary: workflow.ExecutionSummary{
-				ID:             execID,
-				WorkflowName:   wf.Name,
-				WorkflowFile:   fileName,
-				Status:         result.Status,
-				StartTime:      result.StartTime,
-				EndTime:        result.EndTime,
-				StepsCount:     len(wf.Steps),
+				ID:               execID,
+				WorkflowName:     wf.Name,
+				WorkflowFile:     fileName,
+				Status:           result.Status,
+				StartTime:        result.StartTime,
+				EndTime:          result.EndTime,
+				StepsCount:       len(wf.Steps),
 				Nondeterministic: result.Nondeterministic,
 			},
 			Steps:     result.Steps,

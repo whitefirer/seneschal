@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
-	"time"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/whitefirer/seneschal/api"
@@ -202,11 +206,60 @@ func main() {
 	if len(cfg.AllowedOrigins) > 0 {
 		fmt.Printf("  🔒 Origins: %v\n", cfg.AllowedOrigins)
 	}
+	if cfg.AuthToken != "" {
+		fmt.Printf("  🔑 Auth: Bearer token required for /api/*\n")
+	}
 	fmt.Printf("\n")
 	fmt.Printf("  Press Ctrl+C to stop\n")
 	fmt.Printf("\n")
 
-	if err := http.ListenAndServe(addr, r); err != nil {
+	// Informed-design guardrail: binding a shell-executing server to a
+	// non-loopback interface without auth is almost certainly a mistake.
+	// Warn loudly but do not fatal — the operator may have an authenticating
+	// reverse proxy in front.
+	if cfg.AuthToken == "" && !isLoopbackHost(cfg.Host) {
+		log.Printf("⚠️  WARNING: no auth_token configured and binding to %s — anyone who can reach this port can run arbitrary shell commands on this host. Set auth_token in %s.", addr, configPath)
+	}
+
+	// Middleware chain: CORS outermost (handles preflight before auth), then
+	// Bearer-token auth on /api/*, then the router.
+	var root http.Handler = r
+	root = cfg.AuthMiddleware(root)
+	root = cfg.CORSMiddleware(root)
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: root,
+		// No WriteTimeout: it would kill long-lived WebSocket/SSE connections.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+
+	// Graceful shutdown on SIGINT/SIGTERM.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Graceful shutdown failed: %v", err)
+		}
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// isLoopbackHost reports whether host binds only to loopback (empty host
+// defaults to 127.0.0.1 via ServerConfig.Addr).
+func isLoopbackHost(host string) bool {
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

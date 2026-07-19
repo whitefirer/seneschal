@@ -11,15 +11,18 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/whitefirer/seneschal/config"
 	"github.com/whitefirer/seneschal/workflow"
 )
 
 // e2eTestServer is a fully-wired test server with a real Handler, real
-// ExecutionStore (FileStore in temp dir), and real workflow files.
+// ExecutionStore (FileStore in temp dir), real workflow files, and a real
+// RunbookHandler backed by its own temp runbooks dir.
 type e2eTestServer struct {
-	server *httptest.Server
-	hub    *WSHub
-	dir    string
+	server      *httptest.Server
+	hub         *WSHub
+	dir         string
+	runbooksDir string
 }
 
 func setupE2E(t *testing.T) *e2eTestServer {
@@ -34,13 +37,27 @@ func setupE2E(t *testing.T) *e2eTestServer {
 	store := workflow.NewFileStore(filepath.Join(dir, "executions"))
 	handler := NewHandler(hub, dir, store, workflow.AIConfig{}, nil, func(r *http.Request) bool { return true })
 
-	router := buildTestRouter(handler)
+	// Runbook wiring mirrors cmd/server/main.go: a RunbookManager over a temp
+	// runbooks dir, with the same trigger callback the server uses so a
+	// triggered runbook really executes its workflow and persists the run.
+	runbooksDir := filepath.Join(dir, "runbooks")
+	if err := os.MkdirAll(runbooksDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runbookMgr := workflow.NewRunbookManager(runbooksDir, dir,
+		MakeTriggerCallback(store, hub, dir, workflow.AIConfig{}), nil)
+	runbookMgr.LoadDir()
+	runbookHandler := NewRunbookHandler(runbookMgr, runbooksDir, dir)
+
+	router := buildTestRouter(handler, runbookHandler)
 	server := httptest.NewServer(router)
 
-	return &e2eTestServer{server: server, hub: hub, dir: dir}
+	return &e2eTestServer{server: server, hub: hub, dir: dir, runbooksDir: runbooksDir}
 }
 
-func buildTestRouter(handler *Handler) *mux.Router {
+// buildTestRouter mirrors the route table in cmd/server/main.go (API routes,
+// runbook routes, /api/ws) wrapped in the same middleware chain.
+func buildTestRouter(handler *Handler, runbookHandler *RunbookHandler) http.Handler {
 	r := mux.NewRouter()
 	r.HandleFunc("/api/workflows", handler.ListWorkflows).Methods("GET")
 	r.HandleFunc("/api/workflows/{name}", handler.GetWorkflow).Methods("GET")
@@ -52,8 +69,18 @@ func buildTestRouter(handler *Handler) *mux.Router {
 	r.HandleFunc("/api/executions/{id}", handler.GetExecution).Methods("GET")
 	r.HandleFunc("/api/executions/{id}", handler.DeleteExecution).Methods("DELETE")
 	r.HandleFunc("/api/executions/{id}/replay", handler.ReplayExecution).Methods("POST")
+	r.HandleFunc("/api/executions/{id}/ask", handler.AskExecution).Methods("POST")
 	r.HandleFunc("/api/chat", handler.ChatHandler).Methods("POST")
-	return r
+	r.HandleFunc("/api/ws", handler.WSHandler)
+	RegisterRunbookRoutes(r, runbookHandler)
+	// Mirror cmd/server/main.go: CORS then auth wrap the router. An empty
+	// ServerConfig makes both no-ops for these tests (no Origin headers are
+	// sent, and no auth token is configured).
+	cfg := &config.ServerConfig{}
+	var h http.Handler = r
+	h = cfg.AuthMiddleware(h)
+	h = cfg.CORSMiddleware(h)
+	return h
 }
 
 func (e *e2eTestServer) close() { e.server.Close() }
@@ -84,22 +111,54 @@ func (e *e2eTestServer) get(path string) (int, map[string]interface{}) {
 	return resp.StatusCode, result
 }
 
+// put sends a PUT with a raw string body (e.g. workflow/runbook YAML).
+func (e *e2eTestServer) put(path, body string) (int, map[string]interface{}) {
+	req, err := http.NewRequest("PUT", e.server.URL+path, bytes.NewBufferString(body))
+	if err != nil {
+		return 0, nil
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil
+	}
+	defer resp.Body.Close()
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
+}
+
+func (e *e2eTestServer) delete(path string) (int, map[string]interface{}) {
+	req, err := http.NewRequest("DELETE", e.server.URL+path, nil)
+	if err != nil {
+		return 0, nil
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil
+	}
+	defer resp.Body.Close()
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return resp.StatusCode, result
+}
+
 func (e *e2eTestServer) pollExecution(execID string) map[string]interface{} {
-	// Wait for workflow to finish before reading (avoids data race between
-	// the executor goroutine writing ExecutionDetail and our GET serializing it).
-	time.Sleep(1 * time.Second)
-	for i := 0; i < 30; i++ {
+	// Poll until the execution reaches a terminal state. GetExecution is
+	// race-safe (it serializes a deep copy made under the lock), so polling
+	// during the run is fine.
+	for i := 0; i < 100; i++ {
 		_, result := e.get("/api/executions/" + execID)
 		data, ok := result["data"].(map[string]interface{})
 		if !ok {
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		status, _ := data["status"].(string)
 		if status != "running" && status != "" {
 			return data
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	return nil
 }

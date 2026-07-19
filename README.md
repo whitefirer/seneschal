@@ -283,7 +283,7 @@ go build -o seneschal ./cmd/cli/
 # 或:./seneschal-server --port 8888
 ```
 
-⚠️ **安全告示**:`seneschal-server` 默认只监听 `127.0.0.1`,**不要直接暴露到公网**。当前版本未做鉴权,`shell` action 会以服务进程身份执行任意命令。如需远程访问,请放在反向代理(加鉴权、TLS、限流)之后。详见 [ARCHITECTURE.md](ARCHITECTURE.md) 的"安全"章节。
+⚠️ **安全告示**:`seneschal-server` 默认只监听 `127.0.0.1`,**不要直接暴露到公网**。`shell` action 会以服务进程身份执行任意命令,且其中的 `{{.变量}}` 经模板渲染后直接进入 `sh -c` —— 不可信输入(API 请求体、webhook 参数、LLM 生成的参数)可注入命令。绑定非 localhost 地址时务必在 `server.yaml` 配置 `auth_token`(见 [config.example.yaml](config.example.yaml)),或放在加鉴权、TLS、限流的反向代理之后。详见 [ARCHITECTURE.md](ARCHITECTURE.md) 的"安全"章节。
 
 ## 进一步阅读
 
