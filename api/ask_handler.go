@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -34,7 +35,17 @@ func (h *Handler) AskExecution(w http.ResponseWriter, r *http.Request) {
 		Question string `json:"question"`
 	}
 	if r.Body != nil {
-		json.NewDecoder(r.Body).Decode(&req)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			// An oversized body is rejected outright; any other decode error
+			// is tolerated because the question is optional (a malformed
+			// body simply means "no question asked").
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				writeJSON(w, http.StatusRequestEntityTooLarge, errorResp("request body too large"))
+				return
+			}
+		}
 	}
 
 	// Build an ExecutionView from memory or the store.

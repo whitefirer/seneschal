@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 )
 
 // runbookYAML is a minimal manual-trigger runbook pointing at the simple.yaml
@@ -87,10 +86,8 @@ func TestE2E_TriggerRunbook(t *testing.T) {
 		t.Fatalf("save status=%d result=%v", code, result)
 	}
 
-	// Trigger. The response confirms dispatch only — TriggerRunbook does NOT
-	// return an execution ID (the run is dispatched asynchronously by the
-	// trigger callback), so we verify the side effect instead: a persisted
-	// execution named "runbook-nightly-<pid>" shows up in /api/executions.
+	// Trigger confirms dispatch AND returns the new execution's ID. The run
+	// itself is still dispatched asynchronously by the trigger callback.
 	code, result := e.post("/api/runbooks/nightly/trigger", map[string]interface{}{})
 	if code != 200 {
 		t.Fatalf("trigger status=%d result=%v", code, result)
@@ -102,28 +99,20 @@ func TestE2E_TriggerRunbook(t *testing.T) {
 	if n, _ := data["runbook"].(string); n != "nightly" {
 		t.Errorf("trigger: runbook=%q want nightly", n)
 	}
+	execID, _ := data["executionId"].(string)
+	if execID == "" {
+		t.Fatal("trigger: expected a non-empty executionId in the response")
+	}
 
-	// Poll the execution list until the runbook-fired run appears (the
-	// callback persists the snapshot only after the workflow finishes, so a
-	// visible entry is already terminal).
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		_, list := e.get("/api/executions")
-		items, _ := list["data"].([]interface{})
-		for _, it := range items {
-			m, _ := it.(map[string]interface{})
-			id, _ := m["id"].(string)
-			if strings.HasPrefix(id, "runbook-nightly-") {
-				if st, _ := m["status"].(string); st != "success" {
-					t.Errorf("runbook execution status=%q want success", st)
-				}
-				return
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("runbook execution never appeared in /api/executions")
-		}
-		time.Sleep(100 * time.Millisecond)
+	// Poll that very execution to completion. The callback persists the
+	// snapshot only after the workflow finishes, so pollExecution tolerates
+	// the initial 404s while it runs.
+	exec := e.pollExecution(execID)
+	if exec == nil {
+		t.Fatalf("runbook execution %s never completed", execID)
+	}
+	if st, _ := exec["status"].(string); st != "success" {
+		t.Errorf("runbook execution status=%q want success", st)
 	}
 }
 
@@ -155,22 +144,32 @@ func TestE2E_SaveRunbook_InvalidYAML(t *testing.T) {
 	e := setupE2E(t)
 	defer e.close()
 
-	// SaveRunbook does not validate the YAML — it stores the body and returns
-	// 200. The manager's loader rejects the file (unparseable / missing the
-	// required 'workflow' field) and skips it, so the runbook never becomes
-	// visible. Assert the actual contract: save 200, but get 404 and absent
-	// from the list.
+	// SaveRunbook validates the body before writing: unparsable YAML is
+	// rejected with 400 and never reaches disk (previously it returned 200
+	// and the manager's loader then silently skipped the file). The positive
+	// case — valid YAML saves with 200 and becomes visible — is covered by
+	// TestE2E_RunbookLifecycle.
 	code, result := e.put("/api/runbooks/broken.yaml", "{{{{not yaml")
-	if code != 200 {
-		t.Fatalf("save status=%d result=%v", code, result)
+	if code != 400 {
+		t.Fatalf("save status=%d want 400 result=%v", code, result)
+	}
+	if msg, _ := result["error"].(string); !strings.Contains(msg, "invalid runbook YAML") {
+		t.Errorf("error=%q want it to mention 'invalid runbook YAML'", msg)
 	}
 	if code, _ := e.get("/api/runbooks/broken"); code != 404 {
-		t.Errorf("get broken runbook: status=%d want 404 (invalid YAML must not load)", code)
+		t.Errorf("get broken runbook: status=%d want 404 (invalid YAML must not be stored)", code)
 	}
 	_, list := e.get("/api/runbooks")
 	items, _ := list["data"].([]interface{})
 	if len(items) != 0 {
 		t.Errorf("invalid runbook must not be listed, got %v", items)
+	}
+
+	// Valid YAML without the required 'workflow' field is rejected too —
+	// the loader would skip such a file for the same reason.
+	code, _ = e.put("/api/runbooks/noworkflow.yaml", "name: noworkflow\n")
+	if code != 400 {
+		t.Errorf("save without 'workflow' field: status=%d want 400", code)
 	}
 }
 
@@ -184,6 +183,59 @@ func TestE2E_SaveRunbook_BodyTooLarge(t *testing.T) {
 	code, _ := e.put("/api/runbooks/too-big.yaml", string(big))
 	if code != 400 {
 		t.Errorf("status=%d want 400", code)
+	}
+}
+
+func TestE2E_TriggerRunbook_BodyTooLarge(t *testing.T) {
+	e := setupE2E(t)
+	defer e.close()
+
+	// Trigger bodies are capped at maxRequestBodyBytes (1 MiB), enforced
+	// before the runbook is even looked up.
+	big := bytes.Repeat([]byte("x"), maxRequestBodyBytes+1)
+	resp, err := http.Post(e.server.URL+"/api/runbooks/nightly/trigger", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("status=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestE2E_TriggerByPath_BodyTooLarge(t *testing.T) {
+	e := setupE2E(t)
+	defer e.close()
+
+	big := bytes.Repeat([]byte("x"), maxRequestBodyBytes+1)
+	resp, err := http.Post(e.server.URL+"/api/triggers/hook", "application/json", bytes.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Errorf("status=%d want 400", resp.StatusCode)
+	}
+}
+
+func TestE2E_AskExecution_BodyTooLarge(t *testing.T) {
+	e := setupE2E(t)
+	defer e.close()
+
+	// AskExecution rejects an oversized question body with 413 before it
+	// even looks up the execution. The payload is a valid JSON envelope
+	// around a huge string: with a plain invalid-JSON body the decoder
+	// would fail before ever reading up to the limit.
+	big := bytes.Repeat([]byte("x"), maxRequestBodyBytes)
+	body := append([]byte(`{"question":"`), big...)
+	body = append(body, []byte(`"}`)...)
+	resp, err := http.Post(e.server.URL+"/api/executions/exec-nope/ask", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("status=%d want 413", resp.StatusCode)
 	}
 }
 

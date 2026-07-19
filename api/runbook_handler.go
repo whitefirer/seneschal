@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/whitefirer/seneschal/workflow"
+	"gopkg.in/yaml.v3"
 )
 
 // RunbookHandler handles runbook CRUD + trigger endpoints.
@@ -48,35 +49,65 @@ func (h *RunbookHandler) GetRunbook(w http.ResponseWriter, r *http.Request) {
 // TriggerRunbook POST /api/runbooks/{name}/trigger
 func (h *RunbookHandler) TriggerRunbook(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
-	var extraVars map[string]string
-	if r.Body != nil {
-		body, _ := io.ReadAll(r.Body)
-		if len(body) > 0 {
-			json.Unmarshal(body, &extraVars)
-		}
+	extraVars, ok := readTriggerExtraVars(w, r)
+	if !ok {
+		return
 	}
 	if err := h.manager.Trigger(name, extraVars); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, success(map[string]string{"status": "triggered", "runbook": name}))
+	resp := map[string]string{"status": "triggered", "runbook": name}
+	if id := extraVars[triggerExecIDKey]; id != "" {
+		resp["executionId"] = id
+	}
+	writeJSON(w, http.StatusOK, success(resp))
 }
 
 // TriggerByPath POST /api/triggers/{path:.*}
 func (h *RunbookHandler) TriggerByPath(w http.ResponseWriter, r *http.Request) {
 	path := "/" + mux.Vars(r)["path"]
-	var extraVars map[string]string
-	if r.Body != nil {
-		body, _ := io.ReadAll(r.Body)
-		if len(body) > 0 {
-			json.Unmarshal(body, &extraVars)
-		}
+	extraVars, ok := readTriggerExtraVars(w, r)
+	if !ok {
+		return
 	}
 	if err := h.manager.TriggerByPath(path, extraVars); err != nil {
 		writeJSON(w, http.StatusNotFound, errorResp(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, success(map[string]string{"status": "triggered", "path": path}))
+	resp := map[string]string{"status": "triggered", "path": path}
+	if id := extraVars[triggerExecIDKey]; id != "" {
+		resp["executionId"] = id
+	}
+	writeJSON(w, http.StatusOK, success(resp))
+}
+
+// readTriggerExtraVars reads the optional JSON body of extra variables for a
+// trigger request, capped at maxRequestBodyBytes. It always returns a non-nil
+// map with any client-supplied execution-ID key stripped, so the trigger
+// callback can hand the generated execution ID back through it (the manager
+// invokes the callback synchronously with this same map). ok is false when
+// the body could not be read; the error response has already been written.
+func readTriggerExtraVars(w http.ResponseWriter, r *http.Request) (vars map[string]string, ok bool) {
+	vars = make(map[string]string)
+	if r.Body == nil {
+		return vars, true
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp("invalid or too large body"))
+		return nil, false
+	}
+	if len(body) > 0 {
+		// Malformed JSON is tolerated: extra vars are optional.
+		_ = json.Unmarshal(body, &vars)
+		if vars == nil {
+			vars = make(map[string]string)
+		}
+	}
+	delete(vars, triggerExecIDKey)
+	return vars, true
 }
 
 // SaveRunbook PUT /api/runbooks/{name}
@@ -91,6 +122,20 @@ func (h *RunbookHandler) SaveRunbook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResp("invalid or too large body"))
+		return
+	}
+	// Validate before writing: the runbook loader silently skips files it
+	// cannot parse (or that lack the required 'workflow' field), so such a
+	// body must be rejected here instead of being stored as a runbook that
+	// never shows up. The raw bytes are still written as-is — the parse is
+	// validation only, not a re-marshal.
+	var rb workflow.RunbookConfig
+	if err := yaml.Unmarshal(body, &rb); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResp("invalid runbook YAML: "+err.Error()))
+		return
+	}
+	if strings.TrimSpace(rb.Workflow) == "" {
+		writeJSON(w, http.StatusBadRequest, errorResp("invalid runbook: 'workflow' field is required"))
 		return
 	}
 	os.MkdirAll(h.runbooksDir, 0755)
@@ -133,7 +178,16 @@ func RegisterRunbookRoutes(r *mux.Router, h *RunbookHandler) {
 // It's set by the server to wire up executor execution.
 type TriggerCallback func(rb *workflow.RunbookConfig, extraVars map[string]string)
 
-// MakeTriggerCallback creates a TriggerFunc that executes the runbook's workflow.
+// triggerExecIDKey is a reserved extraVars key the trigger callback uses to
+// hand the generated execution ID back to the HTTP handler that fired the
+// trigger. It is control metadata — never merged into workflow variables —
+// and the HTTP handlers strip any client-supplied value before dispatching.
+const triggerExecIDKey = "__seneschal_execution_id"
+
+// MakeTriggerCallback creates a TriggerFunc that executes the runbook's
+// workflow. The execution ID is generated synchronously and, when extraVars
+// is non-nil, written back into it under triggerExecIDKey so the triggering
+// HTTP handler can return it to the client; the run itself stays async.
 func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir string, aiCfg workflow.AIConfig) workflow.TriggerFunc {
 	return func(rb *workflow.RunbookConfig, extraVars map[string]string) {
 		// Resolve workflow path.
@@ -148,13 +202,25 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 			return
 		}
 
-		// Merge variables: runbook defaults + trigger extra vars.
+		// Merge variables: runbook defaults + trigger extra vars (minus the
+		// reserved execution-ID key, which is control metadata).
 		vars := make(map[string]string)
 		for k, v := range rb.Variables {
 			vars[k] = v
 		}
 		for k, v := range extraVars {
+			if k == triggerExecIDKey {
+				continue
+			}
 			vars[k] = v
+		}
+
+		// Generate the execution ID up front and hand it back through
+		// extraVars. Unique per trigger — the old runbook-<name>-<pid>
+		// scheme collided when a runbook fired more than once per process.
+		execID := fmt.Sprintf("runbook-%s-%s", rb.Name, randomHex(4))
+		if extraVars != nil {
+			extraVars[triggerExecIDKey] = execID
 		}
 
 		// Execute in background.
@@ -165,7 +231,6 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 
 			// Persist if store is available.
 			if store != nil {
-				execID := fmt.Sprintf("runbook-%s-%d", rb.Name, os.Getpid())
 				_ = store.Save(workflow.ExecutionSnapshot{
 					ExecutionSummary: workflow.ExecutionSummary{
 						ID:           execID,
