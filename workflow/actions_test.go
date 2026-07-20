@@ -663,3 +663,217 @@ func TestActionHTTP(t *testing.T) {
 		})
 	}
 }
+
+// TestActionCondition_ChildDAGCycleEmitsStepComplete covers the container
+// failure path where the child DAG cannot be scheduled (here: an explicit
+// depends_on cycle inside the then branch). The container must emit exactly
+// one step_complete (status failed) — previously the early return left the
+// container running forever in the TUI/WS.
+func TestActionCondition_ChildDAGCycleEmitsStepComplete(t *testing.T) {
+	e := newQuietExecutor(nil)
+
+	var mu sync.Mutex
+	var outputs, completes []ProgressEvent
+	e.OnProgress = func(ev ProgressEvent) {
+		// Only the container's own events, not the (never-run) children's.
+		if ev.Name != "check" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch ev.Type {
+		case "step_output":
+			outputs = append(outputs, ev)
+		case "step_complete":
+			completes = append(completes, ev)
+		}
+	}
+
+	wf := &Workflow{
+		Name: "condition-child-cycle",
+		Steps: []Step{{
+			Name: "check", Action: "condition", Expression: "true",
+			Then: []Step{
+				{Name: "a", Action: "log", Message: "a", DependsOn: []string{"b"}},
+				{Name: "b", Action: "log", Message: "b", DependsOn: []string{"a"}},
+			},
+			Else: []Step{{Name: "no", Action: "log", Message: "no"}},
+		}},
+	}
+	result := e.Execute(wf)
+	if result.Status != "failed" {
+		t.Fatalf("workflow status=%s, want failed", result.Status)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("steps=%d, want 1 container step", len(result.Steps))
+	}
+	sr := result.Steps[0]
+	if sr.Status != "failed" || !strings.Contains(sr.Error, "cycle") {
+		t.Errorf("container: status=%s err=%q, want failed with cycle error", sr.Status, sr.Error)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(completes) != 1 || completes[0].Status != "failed" {
+		t.Errorf("step_complete events=%v, want exactly one with status failed", completes)
+	}
+	if len(outputs) != 1 || !strings.Contains(outputs[0].Output, "cycle") {
+		t.Errorf("step_output events=%v, want exactly one carrying the cycle error", outputs)
+	}
+}
+
+// TestActionCondition_ExpressionEvaluatedOnce pins the decision record: the
+// expression is evaluated once at branch selection and the saved result is
+// reused for the ConditionResult report. A set step inside the taken branch
+// mutates the variable the expression reads; if the engine re-evaluated the
+// expression at container close-out, ConditionResult would flip to the
+// end-of-branch value. Covers both evaluation paths (legacy template
+// comparison and expr-lang).
+func TestActionCondition_ExpressionEvaluatedOnce(t *testing.T) {
+	tests := []struct {
+		name       string
+		expression string
+	}{
+		{name: "legacy template comparison", expression: "{{.env}} == prod"},
+		{name: "expr-lang expression", expression: `env == "prod"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newQuietExecutor(map[string]string{"env": "prod"})
+			wf := &Workflow{
+				Name: "condition-eval-once",
+				Steps: []Step{{
+					Name: "check", Action: "condition", Expression: tt.expression,
+					Then: []Step{
+						{Name: "env", Action: "set", Value: "dev"},
+						{Name: "yes", Action: "log", Message: "prod-mode"},
+					},
+					Else: []Step{{Name: "no", Action: "log", Message: "dev-mode"}},
+				}},
+			}
+			result := e.Execute(wf)
+			if result.Status != "success" {
+				t.Fatalf("status=%s err=%s", result.Status, result.Error)
+			}
+			// Sanity: the branch really mutated the variable, so a
+			// re-evaluation at close-out would now produce false.
+			if got := e.GetContext().Get("env"); got != "dev" {
+				t.Fatalf("context env=%q, want dev (branch mutation did not happen)", got)
+			}
+			if len(result.Steps) != 1 {
+				t.Fatalf("steps=%d, want 1", len(result.Steps))
+			}
+			sr := result.Steps[0]
+			if sr.ConditionResult == nil || *sr.ConditionResult != true {
+				t.Errorf("ConditionResult=%v, want true (branch-selection-time value)", sr.ConditionResult)
+			}
+			if len(sr.ThenChildren) != 2 || sr.ThenChildren[0].Status != "success" || sr.ThenChildren[1].Status != "success" {
+				t.Errorf("then children=%+v, want 2 executed", sr.ThenChildren)
+			}
+			if len(sr.ElseChildren) != 1 || sr.ElseChildren[0].Status != "skipped" {
+				t.Errorf("else children=%+v, want 1 skipped", sr.ElseChildren)
+			}
+		})
+	}
+}
+
+// TestActionForeach_ContainerID verifies the foreach container result carries
+// the same derived step ID as condition/parallel containers (step-<slug>),
+// so frontends and logs can locate it like any other container.
+func TestActionForeach_ContainerID(t *testing.T) {
+	e := newQuietExecutor(nil)
+	wf := &Workflow{
+		Name: "container-ids",
+		Steps: []Step{
+			{
+				Name: "Iterate Items", Action: "foreach", Items: []interface{}{"a"},
+				Do: []Step{{Name: "process", Action: "log", Message: "hi"}},
+			},
+			{
+				Name: "Par Block", Action: "parallel",
+				Steps: []Step{{Name: "p", Action: "log", Message: "x"}},
+			},
+		},
+	}
+	result := e.Execute(wf)
+	if result.Status != "success" {
+		t.Fatalf("status=%s err=%s", result.Status, result.Error)
+	}
+	foreachRes := findStepResult(result, "Iterate Items")
+	if foreachRes == nil {
+		t.Fatal("foreach container result missing")
+	}
+	if foreachRes.ID != "step-iterate-items" {
+		t.Errorf("foreach container ID=%q, want step-iterate-items (same slug rule as other containers)", foreachRes.ID)
+	}
+	parRes := findStepResult(result, "Par Block")
+	if parRes == nil || parRes.ID != "step-par-block" {
+		t.Errorf("parallel container ID=%v, want step-par-block (reference format)", parRes)
+	}
+}
+
+// TestActionForeach_StepOutputEventSymmetry pins the step_output contract for
+// foreach containers: success with aggregated non-empty output emits exactly
+// one step_output (matching plain steps, where a non-empty output triggers
+// the event), empty output emits none, and failure keeps emitting the error.
+func TestActionForeach_StepOutputEventSymmetry(t *testing.T) {
+	tests := []struct {
+		name         string
+		step         Step
+		wantOutputs  int      // number of step_output events for the container
+		wantContains []string // substrings of the event payload
+	}{
+		{
+			name: "success with child output emits step_output",
+			step: Step{
+				Name: "iterate", Action: "foreach", Items: []interface{}{"alpha", "beta"},
+				Do: []Step{{Name: "process", Action: "shell", Command: "echo out-{{.item}}"}},
+			},
+			wantOutputs:  1,
+			wantContains: []string{"out-alpha", "out-beta"},
+		},
+		{
+			name: "empty items emits no step_output",
+			step: Step{
+				Name: "iterate", Action: "foreach", Items: []interface{}{},
+				Do: []Step{{Name: "process", Action: "log", Message: "never"}},
+			},
+			wantOutputs: 0,
+		},
+		{
+			name: "failure still emits step_output with the error",
+			step: Step{
+				Name: "iterate", Action: "foreach", Items: []interface{}{"a"},
+				Do: []Step{{Name: "process", Action: "shell", Command: "exit 1"}},
+			},
+			wantOutputs:  1,
+			wantContains: []string{"failed"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newQuietExecutor(nil)
+			var mu sync.Mutex
+			var outputs []ProgressEvent
+			e.OnProgress = func(ev ProgressEvent) {
+				// Only the container's own events, not the do-children's.
+				if ev.Name != "iterate" || ev.Type != "step_output" {
+					return
+				}
+				mu.Lock()
+				outputs = append(outputs, ev)
+				mu.Unlock()
+			}
+			e.Execute(&Workflow{Name: "foreach-output", Steps: []Step{tt.step}})
+			mu.Lock()
+			defer mu.Unlock()
+			if len(outputs) != tt.wantOutputs {
+				t.Fatalf("step_output events=%d (%v), want %d", len(outputs), outputs, tt.wantOutputs)
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(outputs[0].Output, want) {
+					t.Errorf("step_output payload=%q, want substring %q", outputs[0].Output, want)
+				}
+			}
+		})
+	}
+}

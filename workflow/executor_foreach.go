@@ -119,10 +119,20 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		}
 	}
 
+	// 聚合各迭代的输出作为容器输出:与普通步骤行为一致,容器 output 非空时
+	// 完成前会发 step_output 事件(见 executeContainerDAG 的 foreach 分支)。
+	outputs := make([]string, 0, len(allChildren))
+	for _, child := range allChildren {
+		if child.Output != "" {
+			outputs = append(outputs, child.Output)
+		}
+	}
+
 	return StepResult{
 		Name:     container.Name,
 		Action:   container.Action,
 		Status:   "success",
+		Output:   strings.Join(outputs, "\n"),
 		Children: allChildren,
 	}
 }
@@ -186,10 +196,16 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 
 	// 根据容器类型收集子节点
 	var children []Step
+	// condition 的表达式在分支选择时求值一次并保存;后续 skipped 分支合成、
+	// ConditionResult 上报、失败收尾都复用该结果,不再重复求值——否则分支内
+	// 子步骤改了表达式引用的变量时,ConditionResult 记录的会是末尾状态而非
+	// 分支选择时的决策。
+	var conditionResult *bool
 	if container.Action == "condition" {
 		// Condition: 根据表达式选择 then 或 else
 		expr, _ := e.context.ResolveTemplate(container.Expression)
 		evalResult, _ := e.evaluateExpression(container.Expression)
+		conditionResult = &evalResult
 		if e.richPrinter != nil {
 			e.richPrinter.PrintCondition(expr, evalResult)
 		} else if e.printer != nil {
@@ -206,8 +222,13 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		// Foreach: 迭代执行。这里提前返回,但必须像下方常规完成路径一样发出
 		// 容器完成事件,否则 TUI/WS 上该容器一直显示 running。
 		sr := e.executeForeach(container, depth, result, parentID)
+		// 与 condition/parallel 容器一致,补上容器 step ID(前端/日志按 ID 定位)。
+		sr.ID = containerStepID
 		if sr.Status == "failed" {
 			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", sr.Error, "", depth, parentID, nil)
+		} else if sr.Output != "" {
+			// 与普通步骤一致(executeStepOnce):output 非空才发 step_output。
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, sr.Status, sr.Output, "", depth, parentID, nil)
 		}
 		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, sr.Status, "", "", depth, parentID, nil)
 		return sr
@@ -219,20 +240,29 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	// 为子节点构建子 DAG 图
 	graph, err := e.buildDAGGraph(children)
 	if err != nil {
+		// 建图失败也要像常规失败路径一样发出容器完成事件,否则容器步骤在
+		// TUI/WS 上一直显示 running。
+		stepErr := fmt.Sprintf("build child DAG graph: %v", err)
+		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
 		return StepResult{
 			Name:   container.Name,
 			Status: "failed",
-			Error:  fmt.Sprintf("build child DAG graph: %v", err),
+			Error:  stepErr,
 		}
 	}
 
 	// 拓扑排序子 DAG
 	order, err := e.topologicalSort(graph)
 	if err != nil {
+		// 同上:拓扑排序失败(如子 DAG 成环)也要补发容器完成事件。
+		stepErr := fmt.Sprintf("topological sort child DAG: %v", err)
+		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
 		return StepResult{
 			Name:   container.Name,
 			Status: "failed",
-			Error:  fmt.Sprintf("topological sort child DAG: %v", err),
+			Error:  stepErr,
 		}
 	}
 
@@ -297,8 +327,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			Children: containerChildren,
 		}
 		if container.Action == "condition" {
-			evalResult, _ := e.evaluateExpression(container.Expression)
-			containerResult.ConditionResult = &evalResult
+			containerResult.ConditionResult = conditionResult
 		}
 		// Send WebSocket events for container completion
 		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, "", depth, parentID, nil)
@@ -316,10 +345,9 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	// For condition nodes, set ThenChildren/ElseChildren instead of Children
 	if container.Action == "condition" {
 		containerResult.Children = nil
-		// Determine which branch was executed based on condition result
-		evalResult, _ := e.evaluateExpression(container.Expression)
-		containerResult.ConditionResult = &evalResult
-		if evalResult {
+		// 复用分支选择时的求值结果(见上方 conditionResult),不在此重复求值。
+		containerResult.ConditionResult = conditionResult
+		if *conditionResult {
 			containerResult.ThenChildren = containerChildren // Executed branch
 			// Create skipped results for else branch
 			skippedElse := make([]StepResult, 0, len(container.Else))
