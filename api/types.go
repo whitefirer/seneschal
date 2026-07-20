@@ -67,6 +67,13 @@ type ExecutionDetail struct {
 	Logs     []LogEntry            `json:"logs"`
 	Steps    []workflow.StepResult `json:"steps"`
 	Workflow string                `json:"workflow"`
+	// Variables carries the resolved execution variables. Real values are
+	// kept internally (the store snapshot holds them for replay); they are
+	// masked at response serialization time — see maskForResponse.
+	Variables map[string]string `json:"variables,omitempty"`
+	// SensitivePatterns drives response-time masking (from the workflow's
+	// sensitive: declaration). Never serialized.
+	SensitivePatterns []string `json:"-"`
 }
 
 type LogEntry struct {

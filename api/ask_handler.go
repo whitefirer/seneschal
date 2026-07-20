@@ -148,7 +148,7 @@ func detailToView(d *ExecutionDetail) ai.ExecutionView {
 		WorkflowName:     d.WorkflowName,
 		Status:           d.Status,
 		Error:            d.Error,
-		Variables:        nil, // detail doesn't carry resolved vars; available in snapshot
+		Variables:        workflow.MaskVariables(d.Variables, d.SensitivePatterns),
 		Steps:            convertStepsToView(d.Steps),
 		Nondeterministic: false,
 	}
@@ -156,10 +156,13 @@ func detailToView(d *ExecutionDetail) ai.ExecutionView {
 
 func snapshotToView(snap workflow.ExecutionSnapshot) ai.ExecutionView {
 	return ai.ExecutionView{
-		WorkflowName:     snap.WorkflowName,
-		Status:           snap.Status,
-		Error:            snap.Error,
-		Variables:        snap.Variables,
+		WorkflowName: snap.WorkflowName,
+		Status:       snap.Status,
+		Error:        snap.Error,
+		// Mask sensitive variables before handing the view to the AI
+		// provider: anything the model sees can end up in the streamed
+		// answer. Patterns come from the snapshot's stored workflow YAML.
+		Variables:        workflow.MaskVariables(snap.Variables, sensitivePatternsFromYAML(snap.Workflow)),
 		Steps:            convertStepsToView(snap.Steps),
 		Nondeterministic: snap.Nondeterministic,
 	}

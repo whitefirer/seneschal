@@ -85,8 +85,9 @@ func (h *Handler) warmCache() {
 }
 
 // snapshotToDetail converts a stored ExecutionSnapshot into the in-memory
-// ExecutionDetail used by the API. For warm-cache we only need the record +
-// steps; logs are not persisted.
+// ExecutionDetail used by the API. Variables keep their real values here —
+// they are masked at response serialization (maskForResponse), never in the
+// store, so replay can still restore them. Logs are not persisted.
 func snapshotToDetail(snap workflow.ExecutionSnapshot) *ExecutionDetail {
 	return &ExecutionDetail{
 		ExecutionRecord: ExecutionRecord{
@@ -100,9 +101,11 @@ func snapshotToDetail(snap workflow.ExecutionSnapshot) *ExecutionDetail {
 			Error:        snap.Error,
 			StepsCount:   snap.StepsCount,
 		},
-		Logs:     []LogEntry{},
-		Steps:    snap.Steps,
-		Workflow: snap.WorkflowName,
+		Logs:              []LogEntry{},
+		Steps:             snap.Steps,
+		Workflow:          snap.WorkflowName,
+		Variables:         snap.Variables,
+		SensitivePatterns: sensitivePatternsFromYAML(snap.Workflow),
 	}
 }
 
@@ -772,6 +775,13 @@ func (h *Handler) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			e.EndTime = result.EndTime
 			e.Error = result.Error
 
+			// Keep the resolved variables + sensitive patterns on the detail
+			// so GET responses can serve them masked at serialization time.
+			// Real values stay in memory and in the store snapshot (replay
+			// needs them); only the response is masked.
+			e.Variables = result.Variables
+			e.SensitivePatterns = result.SensitivePatterns
+
 			apiSteps := result.Steps
 
 			// Update steps with results (preserve action from pre-populated steps)
@@ -1087,7 +1097,9 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 		// Fall back to the store for evicted / pre-restart history.
 		if h.store != nil {
 			if snap, serr := h.store.Get(id); serr == nil {
-				writeJSON(w, http.StatusOK, success(snapshotToDetail(snap)))
+				detail := snapshotToDetail(snap)
+				detail.maskForResponse()
+				writeJSON(w, http.StatusOK, success(detail))
 				return
 			}
 		}
@@ -1095,6 +1107,7 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	exec.maskForResponse()
 	writeJSON(w, http.StatusOK, success(exec))
 }
 
@@ -1102,12 +1115,19 @@ func (h *Handler) GetExecution(w http.ResponseWriter, r *http.Request) {
 // mutable memory with the original, safe to use after the lock is released.
 func (e *ExecutionDetail) deepCopy() *ExecutionDetail {
 	cp := &ExecutionDetail{
-		ExecutionRecord: e.ExecutionRecord,
-		Logs:            make([]LogEntry, len(e.Logs)),
-		Steps:           deepCopySteps(e.Steps),
-		Workflow:        e.Workflow,
+		ExecutionRecord:   e.ExecutionRecord,
+		Logs:              make([]LogEntry, len(e.Logs)),
+		Steps:             deepCopySteps(e.Steps),
+		Workflow:          e.Workflow,
+		SensitivePatterns: append([]string(nil), e.SensitivePatterns...),
 	}
 	copy(cp.Logs, e.Logs)
+	if e.Variables != nil {
+		cp.Variables = make(map[string]string, len(e.Variables))
+		for k, v := range e.Variables {
+			cp.Variables[k] = v
+		}
+	}
 	return cp
 }
 
