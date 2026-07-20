@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -895,8 +896,22 @@ func (e *Executor) runWaves(cfg waveConfig) (failed bool, firstErr string) {
 	}
 
 	// Mark remaining waiting nodes as skipped (if the call site wants that).
+	// The waiting map's iteration order is random, so sort the survivors by
+	// topological order first — otherwise two failing runs of the same
+	// workflow produce differently ordered skipped results.
 	if failed && cfg.markSkipped != nil {
+		orderIndex := make(map[string]int, len(cfg.order))
+		for i, id := range cfg.order {
+			orderIndex[id] = i
+		}
+		remaining := make([]string, 0, len(waiting))
 		for id := range waiting {
+			remaining = append(remaining, id)
+		}
+		sort.Slice(remaining, func(i, j int) bool {
+			return orderIndex[remaining[i]] < orderIndex[remaining[j]]
+		})
+		for _, id := range remaining {
 			cfg.markSkipped(id)
 		}
 	}

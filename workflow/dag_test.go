@@ -409,3 +409,34 @@ func TestExecuteDAG_FailureBlocking(t *testing.T) {
 		})
 	}
 }
+
+// TestExecuteDAG_SkippedOrderDeterministic pins the synthesized skipped
+// results to topological order: A fails in the first wave, and the
+// still-waiting B and C must be appended B-before-C on every run. Before
+// runWaves sorted the survivors by waveConfig.order, the waiting map's
+// random iteration order made their relative order a coin flip.
+func TestExecuteDAG_SkippedOrderDeterministic(t *testing.T) {
+	// Two waiting nodes come out in the wrong order with ~50% probability per
+	// run before the fix; 25 runs make a regression practically impossible to
+	// slip through (p ≈ 3e-8).
+	for i := 0; i < 25; i++ {
+		// Fresh steps per run: execution may annotate the step structs.
+		steps := []Step{
+			{Name: "A", Action: "shell", Command: "exit 1"},
+			{Name: "B", Action: "log", Message: "b", DependsOn: []string{"A"}},
+			{Name: "C", Action: "log", Message: "c", DependsOn: []string{"B"}},
+		}
+		r := runDAG(newQuietExecutor(nil), &Workflow{Name: "det", Steps: steps})
+		if r.Status != "failed" {
+			t.Fatalf("run %d: status=%s, want failed", i, r.Status)
+		}
+		got := stepNames(r.Steps)
+		want := []string{"A", "B", "C"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d: step order %v, want %v (skipped results must follow topological order)", i, got, want)
+		}
+		if r.Steps[1].Status != "skipped" || r.Steps[2].Status != "skipped" {
+			t.Fatalf("run %d: B and C must be skipped: %+v", i, r.Steps)
+		}
+	}
+}
