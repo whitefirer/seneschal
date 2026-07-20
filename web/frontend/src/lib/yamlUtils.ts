@@ -21,7 +21,7 @@ export function yamlToWorkflow(yamlStr: string): Workflow {
       variables: doc?.variables || {},
       steps: doc?.steps || [],
     }
-  } catch (error) {
+  } catch {
     // Return empty workflow on parse error
     return {
       name: 'unnamed',

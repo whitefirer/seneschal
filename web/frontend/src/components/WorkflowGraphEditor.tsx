@@ -665,8 +665,9 @@ export default function WorkflowGraphEditor({
         
         // 比较顺序
         if (JSON.stringify(orig.order) !== JSON.stringify(curr.order)) {
+          // 顺序差异当前无需处理（保留比较占位）
         }
-        
+
         // 比较数据
         if (JSON.stringify(orig.data) !== JSON.stringify(curr.data)) {
           // 找出具体哪个字段变化
@@ -678,6 +679,7 @@ export default function WorkflowGraphEditor({
             }
             Object.keys(o.data).forEach(key => {
               if (JSON.stringify(o.data[key]) !== JSON.stringify(c.data[key])) {
+                // 字段级差异定位暂未使用（保留比较占位）
               }
             })
           }
@@ -1499,7 +1501,6 @@ export default function WorkflowGraphEditor({
   }, [nodes])
 
   // 保存
-  // @ts-ignore - 类型转换
   const handleSave = useCallback(() => {
     // 先验证
     const validation = validateNodes()
@@ -1519,7 +1520,6 @@ export default function WorkflowGraphEditor({
   }, [nodes, onSave, calculateStepsHash, validateNodes])
 
   // 运行
-  // @ts-ignore - 类型转换
   const handleRun = useCallback(() => {
     // 先验证
     const validation = validateNodes()
@@ -1536,7 +1536,6 @@ export default function WorkflowGraphEditor({
 
   // ==================== 初始化 ====================
 
-  // @ts-ignore - 类型转换
   useEffect(() => {
     if (initialSteps && initialSteps.length > 0) {
       // 使用新的 DAG 转换器（自动推断依赖）
@@ -1587,6 +1586,7 @@ export default function WorkflowGraphEditor({
       
       setHasUnsavedChanges(false)  // 明确设置为未修改状态
     } else {
+      // 无初始步骤：保持空画布
     }
   }, [initialSteps, yamlToDAG, calculateLayout])
 

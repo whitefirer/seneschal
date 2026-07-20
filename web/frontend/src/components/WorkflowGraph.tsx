@@ -665,8 +665,8 @@ function calculateLayout(
           currentY += NODE_HEIGHT + V_SPACING
         })
         
-        let childMaxX = childrenStartX + NODE_WIDTH
-        let childMaxY = currentY - V_SPACING
+        const childMaxX = childrenStartX + NODE_WIDTH
+        const childMaxY = currentY - V_SPACING
         
         allNodes.push(...childNodes)
         
@@ -1173,7 +1173,7 @@ export interface WorkflowGraphProps {
   onLockChange?: (locked: boolean) => void
 }
 
-export function WorkflowGraph({ steps, executionSteps: _executionSteps = [], onNodeClick, showMiniMap = true, logLayout = 'none', collapsedNodes: externalCollapsedNodes, onCollapseChange, locked: externalLocked, onLockChange }: WorkflowGraphProps) {
+export function WorkflowGraph({ steps, onNodeClick, showMiniMap = true, logLayout = 'none', collapsedNodes: externalCollapsedNodes, onCollapseChange, locked: externalLocked, onLockChange }: WorkflowGraphProps) {
   const { t } = useTranslation()
   const { isDark } = useThemeStore()
   const [internalCollapsedNodes, setInternalCollapsedNodes] = useState<Set<string>>(new Set())
@@ -1266,8 +1266,6 @@ export function WorkflowGraph({ steps, executionSteps: _executionSteps = [], onN
 
   // 所有 hooks 必须在早期返回之前
   const { nodes: positionedNodes, foreachGroups, parallelGroups } = useMemo(() => {
-    if (enrichedSteps?.length > 0) {
-    }
     if (!enrichedSteps || enrichedSteps.length === 0) return { nodes: [], nextX: 0, maxY: 0, foreachGroups: new Map(), parallelGroups: new Map() }
     return calculateLayout(enrichedSteps, 50, 50)
   }, [enrichedSteps])
@@ -1550,8 +1548,6 @@ export function workflowToFlowSteps(workflowSteps: any[]): FlowStep[] {
       httpMethod: step.httpMethod || step.method,
       // Log 消息
       logMessage: step.logMessage || step.message,
-    }
-    if (step.action === 'condition') {
     }
     return converted
   })

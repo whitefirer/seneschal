@@ -22,7 +22,7 @@ export const yamlToDAG = (yaml: WorkflowDefinition): GraphNode[] => {
     const nodeId = step.name || step.id || `node-${nodeIndex++}`
     
     // 先递归处理子节点（创建为独立节点）
-    let childIds: string[] = []
+    const childIds: string[] = []
     
     if (step.action === 'condition') {
       if (step.then?.length > 0) {

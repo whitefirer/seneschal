@@ -57,7 +57,7 @@ if (storedTheme) {
       theme: state.theme,
       isDark: calculateIsDark(state.theme)
     })
-  } catch (e) {
+  } catch {
     updateTheme('system')
   }
 } else {

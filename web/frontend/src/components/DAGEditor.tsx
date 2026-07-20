@@ -42,7 +42,9 @@ export default function DAGEditor() {
               variables: yamlObj.variables,
               env: yamlObj.env,
             })
-          } catch {}
+          } catch {
+            // YAML 解析失败时保持编辑器现有内容
+          }
         } catch (error: any) {
           alert(`Failed to load: ${error.message}`)
           navigate('/')

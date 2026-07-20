@@ -12,7 +12,6 @@ import { executionsApi } from '@/api/client'
 import { MarkdownView } from './MarkdownView'
 import { ExecutionChatPanel } from './ExecutionChatPanel'
 import { WorkflowGraph, workflowToFlowSteps, type FlowStep } from '@/components/WorkflowGraph'
-// @ts-ignore - ansi-to-html 没有完整的 ESM 类型定义
 import AnsiToHtmlModule from 'ansi-to-html'
 
 // 创建 ANSI 转 HTML 的实例（使用正确的导入方式）
@@ -966,7 +965,7 @@ export default function Execution() {
       const regex = new RegExp(pattern, flags)
       setSearchRegex(regex)
       setSearchError(null)
-    } catch (e) {
+    } catch {
       setSearchError(t('execution.invalidRegex'))
       setSearchRegex(null)
       setMatchPositions([])
