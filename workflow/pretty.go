@@ -94,6 +94,32 @@ func (p *PrettyPrinter) PrintStepStart(stepName, action string, depth int) {
 	}
 }
 
+// PrintStep implements Printer by delegating to PrintStepStart.
+func (p *PrettyPrinter) PrintStep(step Step, depth int) {
+	p.PrintStepStart(step.Name, step.Action, depth)
+}
+
+// PrintStepResult prints a completed step's outcome in verbose mode, matching
+// what the legacy executor printed inline when no styled printer was active.
+func (p *PrettyPrinter) PrintStepResult(name, status, output, duration string, depth int) {
+	if !p.verbose {
+		return
+	}
+	indent := strings.Repeat("  ", depth)
+	if status == StatusFailed {
+		fmt.Printf("%s  ✗ %s: %s\n", indent, name, output)
+		return
+	}
+	if output == "" {
+		return
+	}
+	preview := output
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+	fmt.Printf("%s  ✓ %s: %s\n", indent, name, preview)
+}
+
 // PrintStepSuccess prints a step success message.
 func (p *PrettyPrinter) PrintStepSuccess(stepName, output string, duration time.Duration, depth int) {
 	indent := strings.Repeat("  ", depth)
@@ -124,6 +150,18 @@ func (p *PrettyPrinter) PrintShellCommand(cmd string) {
 	} else {
 		fmt.Printf("    $ %s\n", cmd)
 	}
+}
+
+// PrintShell implements Printer by delegating to PrintShellCommand (the
+// legacy format has no per-step name or indent).
+func (p *PrettyPrinter) PrintShell(name, command string, depth int) {
+	p.PrintShellCommand(command)
+}
+
+// PrintHTTPRequest prints the request line. The legacy executor printed this
+// inline when no styled printer was active; pretty keeps that plain format.
+func (p *PrettyPrinter) PrintHTTPRequest(method, url string) {
+	fmt.Printf("    %s %s\n", method, url)
 }
 
 // PrintHTTPCall prints an HTTP call.
@@ -179,8 +217,9 @@ func (p *PrettyPrinter) PrintSleep(duration string) {
 	}
 }
 
-// PrintLog prints a log message.
-func (p *PrettyPrinter) PrintLog(level, message string) {
+// PrintLog prints a log message. The name/depth parameters are accepted for
+// Printer interface conformance; the legacy format does not use them.
+func (p *PrettyPrinter) PrintLog(name, level, message string, depth int) {
 	icon := "ℹ"
 	if p.color {
 		color := ColorCyan

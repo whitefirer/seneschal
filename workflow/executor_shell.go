@@ -36,11 +36,7 @@ func (e *Executor) execShell(step Step) (string, error) {
 	args = append(args, command)
 
 	// Print command with pretty output
-	if e.richPrinter != nil {
-		e.richPrinter.PrintShell(step.Name, command, 0)
-	} else if e.printer != nil {
-		e.printer.PrintShellCommand(command)
-	}
+	e.printer.PrintShell(step.Name, command, 0)
 
 	// Derived from the execution context so a canceled run (e.g. TUI quit)
 	// kills the process instead of leaking it.

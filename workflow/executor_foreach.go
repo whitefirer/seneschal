@@ -31,11 +31,7 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		itemVar = "item"
 	}
 
-	if e.richPrinter != nil {
-		e.richPrinter.PrintForeach(len(items), itemVar)
-	} else if e.printer != nil {
-		e.printer.PrintForeach(len(items), itemVar)
-	}
+	e.printer.PrintForeach(len(items), itemVar)
 
 	allChildren := make([]StepResult, 0)
 
@@ -200,11 +196,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	if containerStepID == "" {
 		containerStepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(container.Name, " ", "-")))
 	}
-	if e.richPrinter != nil {
-		e.richPrinter.PrintStep(container, depth)
-	} else if e.printer != nil {
-		e.printer.PrintStepStart(container.Name, container.Action, depth)
-	}
+	e.printer.PrintStep(container, depth)
 	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", depth, parentID, nil)
 
 	// 根据容器类型收集子节点
@@ -219,11 +211,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		expr, _ := e.context.ResolveTemplate(container.Expression)
 		evalResult, _ := e.evaluateExpression(container.Expression)
 		conditionResult = &evalResult
-		if e.richPrinter != nil {
-			e.richPrinter.PrintCondition(expr, evalResult)
-		} else if e.printer != nil {
-			e.printer.PrintCondition(expr, evalResult)
-		}
+		e.printer.PrintCondition(expr, evalResult)
 		if evalResult {
 			children = container.Then
 		} else {

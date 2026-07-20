@@ -35,24 +35,22 @@ type ProgressEvent struct {
 
 // Executor executes workflow steps.
 type Executor struct {
-	context         *Context
-	verbose         bool
-	dryRun          bool
-	httpClient      *http.Client
-	stepCallback    StepCallback
-	OnProgress      func(ProgressEvent) // callback for real-time progress streaming
-	printer         *PrettyPrinter      // pretty output printer (legacy)
-	richPrinter     *RichPrinter        // rich output printer
-	realtimePrinter *RealtimePrinter    // realtime TUI printer
-	outputMode      OutputMode          // output mode
-	totalSteps      int
-	themeName       string       // theme name
-	tuiStyle        string       // TUI style: "hermes" or "claude"
-	forceColor      bool         // force color output even if not a terminal
-	workflowDir     string       // directory of the current workflow file (for sub-workflow relative paths)
-	workflowName    string       // current workflow name (for hooks)
-	workflowHooks   []HookConfig // workflow-level hooks (stored for step inheritance)
-	globalHooks     []HookConfig // server-level hooks (applied to all workflows)
+	context       *Context
+	verbose       bool
+	dryRun        bool
+	httpClient    *http.Client
+	stepCallback  StepCallback
+	OnProgress    func(ProgressEvent) // callback for real-time progress streaming
+	printer       Printer             // unified output printer (pretty/rich/realtime/noop)
+	outputMode    OutputMode          // output mode
+	totalSteps    int
+	themeName     string       // theme name
+	tuiStyle      string       // TUI style: "hermes" or "claude"
+	forceColor    bool         // force color output even if not a terminal
+	workflowDir   string       // directory of the current workflow file (for sub-workflow relative paths)
+	workflowName  string       // current workflow name (for hooks)
+	workflowHooks []HookConfig // workflow-level hooks (stored for step inheritance)
+	globalHooks   []HookConfig // server-level hooks (applied to all workflows)
 	// AI integration (Phase 2). aiProvider is set via SetAIProvider or built
 	// from the workflow's ai: config in Execute(). The ai* fields hold
 	// workflow-level defaults; steps may override per-step in M3+.
@@ -196,38 +194,40 @@ func (e *Executor) SetPrinter(p *PrettyPrinter) {
 	e.printer = p
 }
 
+// makePrinter builds the active printer from the current output mode, theme,
+// and color settings. It centralizes what used to be recreated piecemeal in
+// every setter.
+func (e *Executor) makePrinter() Printer {
+	switch {
+	case e.outputMode == OutputModeTUI:
+		return NewRealtimePrinter(GetTheme(e.themeName), e.tuiStyle)
+	case IsExportMode(e.outputMode):
+		return NoopPrinter{}
+	case e.outputMode == "":
+		// No explicit mode selected: legacy default (API server, tests).
+		return NewPrettyPrinter(false, false)
+	default:
+		return NewRichPrinter(e.outputMode, e.colorEnabled(), e.themeName)
+	}
+}
+
 // SetOutputMode sets the output mode.
 func (e *Executor) SetOutputMode(mode OutputMode) {
 	e.outputMode = mode
 	if e.themeName == "" {
 		e.themeName = "default"
 	}
-	if mode == OutputModeTUI {
-		theme := GetTheme(e.themeName)
-		if e.tuiStyle == "" {
-			e.tuiStyle = "hermes"
-		}
-		e.realtimePrinter = NewRealtimePrinter(theme, e.tuiStyle)
-		return
+	if mode == OutputModeTUI && e.tuiStyle == "" {
+		e.tuiStyle = "hermes"
 	}
-	if e.colorEnabled() {
-		e.richPrinter = NewRichPrinter(mode, true, e.themeName)
-	} else {
-		e.richPrinter = NewRichPrinter(mode, false, e.themeName)
-	}
+	e.printer = e.makePrinter()
 }
 
 // SetTheme sets the color theme.
 func (e *Executor) SetTheme(themeName string) {
 	e.themeName = themeName
-	theme := GetTheme(themeName)
-	// Reinitialize printers if already created
-	if e.richPrinter != nil {
-		e.richPrinter = NewRichPrinter(e.outputMode, e.colorEnabled(), themeName)
-	}
-	if e.realtimePrinter != nil {
-		e.realtimePrinter = NewRealtimePrinter(theme, e.tuiStyle)
-	}
+	// Rebuild the active printer so it picks up the new theme.
+	e.printer = e.makePrinter()
 }
 
 // SetTuiStyle sets the TUI visual style ("hermes" or "claude").
@@ -236,20 +236,18 @@ func (e *Executor) SetTuiStyle(style string) {
 	if e.tuiStyle == "" {
 		e.tuiStyle = "hermes"
 	}
-	if e.realtimePrinter != nil {
-		e.realtimePrinter = NewRealtimePrinter(GetTheme(e.themeName), e.tuiStyle)
+	if _, ok := e.printer.(*RealtimePrinter); ok {
+		e.printer = e.makePrinter()
 	}
 }
 
 // SetForceColor forces color output even if stdout is not a terminal.
 func (e *Executor) SetForceColor(v bool) {
 	e.forceColor = v
-	// Recreate printers with updated color setting
-	if e.richPrinter != nil {
-		e.richPrinter = NewRichPrinter(e.outputMode, e.colorEnabled(), e.themeName)
-	}
-	if e.realtimePrinter != nil {
-		e.realtimePrinter = NewRealtimePrinter(GetTheme(e.themeName), e.tuiStyle)
+	// Recreate color-aware printers with the updated setting.
+	switch e.printer.(type) {
+	case *RichPrinter, *RealtimePrinter:
+		e.printer = e.makePrinter()
 	}
 }
 
@@ -308,8 +306,8 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 		e.OnProgress(event)
 	}
 
-	// Send to TUI event channel if available
-	if e.realtimePrinter != nil {
+	// Send to the TUI event channel if an event-streaming printer is active.
+	if es, ok := e.printer.(EventStreamer); ok {
 		ev := ProgressEvent{
 			StepId:   stepId,
 			Depth:    depth,
@@ -319,7 +317,7 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 			Status:   status,
 			Duration: duration,
 		}
-		if ch := e.realtimePrinter.EventCh; ch != nil {
+		if ch := es.EventChannel(); ch != nil {
 			select {
 			case ch <- ev:
 			default:
@@ -347,7 +345,7 @@ func (e *Executor) sendAIToken(name, stepID, action string, depth int, parentID,
 		})
 	}
 	// TUI channel: include Output (the token) so the detail view can append.
-	if e.realtimePrinter != nil {
+	if es, ok := e.printer.(EventStreamer); ok {
 		ev := ProgressEvent{
 			Type:     "ai_token",
 			StepId:   stepID,
@@ -358,7 +356,7 @@ func (e *Executor) sendAIToken(name, stepID, action string, depth int, parentID,
 			Status:   "running",
 			Output:   token,
 		}
-		if ch := e.realtimePrinter.EventCh; ch != nil {
+		if ch := es.EventChannel(); ch != nil {
 			select {
 			case ch <- ev:
 			default:
@@ -445,21 +443,16 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		if isTerminal() || e.forceColor || os.Getenv("SENESCHAL_FORCE_COLOR") != "" {
 			return e.runTUI(wf, result)
 		}
-		e.realtimePrinter = nil
+		// No terminal: fall back to rich output.
 		e.outputMode = OutputModeRich
-		if e.colorEnabled() {
-			e.richPrinter = NewRichPrinter(e.outputMode, true, e.themeName)
-		} else {
-			e.richPrinter = NewRichPrinter(e.outputMode, false, e.themeName)
-		}
+		e.printer = e.makePrinter()
 	}
 
 	// Export modes (json/html): suppress terminal printers during execution,
 	// run quietly, then emit the structured export afterward.
 	if IsExportMode(e.outputMode) {
 		e.verbose = false
-		e.printer = nil
-		e.richPrinter = nil
+		e.printer = NoopPrinter{}
 	}
 
 	result = e.runWorkflow(wf, result)
@@ -479,10 +472,11 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 // runTUI runs the workflow inside a bubbletea TUI on the current goroutine.
 func (e *Executor) runTUI(wf *Workflow, result *WorkflowResult) *WorkflowResult {
 	e.verbose = false
-	e.printer = nil
 
 	ch := make(chan ProgressEvent, 256)
-	e.realtimePrinter.SetEventChannel(ch)
+	if es, ok := e.printer.(EventStreamer); ok {
+		es.SetEventChannel(ch)
+	}
 
 	// Run workflow in background goroutine
 	var wg sync.WaitGroup
@@ -497,7 +491,9 @@ func (e *Executor) runTUI(wf *Workflow, result *WorkflowResult) *WorkflowResult 
 	// while the workflow is still running: cancel in-flight work and wait for
 	// the background goroutine — otherwise reading result below would race
 	// its writes and the goroutine would leak.
-	e.realtimePrinter.Run()
+	if r, ok := e.printer.(Runner); ok {
+		r.Run()
+	}
 	if e.execCancel != nil {
 		e.execCancel()
 	}
@@ -528,12 +524,7 @@ func (e *Executor) finalizeResult(result *WorkflowResult) {
 
 // runWorkflow executes the core workflow logic without TUI setup.
 func (e *Executor) runWorkflow(wf *Workflow, result *WorkflowResult) *WorkflowResult {
-	// Print header (fallback to legacy printer if richPrinter not set)
-	if e.richPrinter != nil {
-		e.richPrinter.PrintHeader(wf)
-	} else if e.printer != nil {
-		e.printer.PrintHeader(wf)
-	}
+	e.printer.PrintHeader(wf)
 	if errs := wf.Validate(); len(errs) > 0 {
 		result.Status = "failed"
 		var errMsgs []string
@@ -569,11 +560,12 @@ func (e *Executor) runWorkflow(wf *Workflow, result *WorkflowResult) *WorkflowRe
 
 	result.EndTime = Now()
 
-	// Print footer
-	if e.realtimePrinter != nil {
-		e.realtimePrinter.Stop(result, result.StartTime, result.EndTime)
-	} else if e.richPrinter != nil {
-		e.richPrinter.PrintFooter(result, result.StartTime, result.EndTime)
+	// Print footer. A lifecycle printer (TUI) gets the result via Stop and
+	// renders its own final view; everyone else gets PrintFooter.
+	if r, ok := e.printer.(Runner); ok {
+		r.Stop(result, result.StartTime, result.EndTime)
+	} else {
+		e.printer.PrintFooter(result, result.StartTime, result.EndTime)
 	}
 
 	return result
@@ -1060,11 +1052,7 @@ func (e *Executor) executeStepOnce(step Step, depth int, wfResult *WorkflowResul
 	}
 
 	// Print step start with pretty output
-	if e.richPrinter != nil {
-		e.richPrinter.PrintStep(step, depth)
-	} else if e.printer != nil {
-		e.printer.PrintStepStart(step.Name, step.Action, depth)
-	}
+	e.printer.PrintStep(step, depth)
 
 	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, parentID, nil)
 
@@ -1294,23 +1282,11 @@ errorRecovery:
 		if step.Action == "http" && output != "" {
 			result.Output = output
 		}
-		if e.richPrinter != nil {
-			e.richPrinter.PrintStepResult(step.Name, "failed", err.Error(), result.Duration, depth)
-		} else if e.verbose {
-			fmt.Printf("%s  ✗ %s: %s\n", indent, step.Name, err.Error())
-		}
+		e.printer.PrintStepResult(step.Name, StatusFailed, err.Error(), result.Duration, depth)
 	} else {
 		result.Status = "success"
 		result.Output = output
-		if e.richPrinter != nil {
-			e.richPrinter.PrintStepResult(step.Name, "success", output, result.Duration, depth)
-		} else if output != "" && e.verbose {
-			preview := output
-			if len(preview) > 200 {
-				preview = preview[:200] + "..."
-			}
-			fmt.Printf("%s  ✓ %s: %s\n", indent, step.Name, preview)
-		}
+		e.printer.PrintStepResult(step.Name, StatusSuccess, output, result.Duration, depth)
 	}
 
 	// Fire step callback for streaming (after status is set)

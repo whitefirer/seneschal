@@ -456,12 +456,12 @@ func (p *RichPrinter) printTimelineFooter(result *WorkflowResult, startTime, end
 
 func (p *RichPrinter) printCompactFooter(result *WorkflowResult, startTime, endTime string) {
 	status := "✓"
-	if result.Status == "failed" {
+	if result.Status == StatusFailed {
 		status = "✗"
 	}
 	ok := 0
 	for _, step := range result.Steps {
-		if step.Status == "completed" || step.Status == "success" {
+		if isSuccessStatus(step.Status) {
 			ok++
 		}
 	}
@@ -481,21 +481,7 @@ func (p *RichPrinter) box(lines []string) string {
 	return p.style.BoxStyle().Render(strings.Join(lines, "\n"))
 }
 
-// stepIcon returns an icon for the action type.
+// stepIcon returns an icon for the action type (canonical map in printer.go).
 func (p *RichPrinter) stepIcon(action string) string {
-	icons := map[string]string{
-		"shell":     "◇",
-		"log":       "◆",
-		"http":      "○",
-		"condition": "◇",
-		"parallel":  "◎",
-		"foreach":   "◈",
-		"set":       "◦",
-		"sleep":     "◌",
-		"template":  "◉",
-	}
-	if icon, ok := icons[action]; ok {
-		return icon
-	}
-	return "◦"
+	return actionIcon(action)
 }

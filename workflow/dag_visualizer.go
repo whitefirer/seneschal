@@ -170,18 +170,7 @@ func (v *DAGVisualizer) renderLeafNode(step StepResult, indent, connector string
 }
 
 func (v *DAGVisualizer) getStatusIcon(status string) string {
-	switch status {
-	case "completed", "success", "done":
-		return "✅"
-	case "failed":
-		return "❌"
-	case "running":
-		return "🔄"
-	case "skipped":
-		return "⏭️"
-	default:
-		return "⏳"
-	}
+	return statusIcon(status)
 }
 
 func (v *DAGVisualizer) getContainerLabel(step StepResult) string {

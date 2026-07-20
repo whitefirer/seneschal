@@ -238,16 +238,5 @@ func (t *TimelineAnimator) renderStats(result *WorkflowResult, total time.Durati
 }
 
 func (t *TimelineAnimator) getStatusIcon(status string) string {
-	switch status {
-	case "completed", "success", "done":
-		return "✅"
-	case "failed":
-		return "❌"
-	case "running":
-		return "🔄"
-	case "skipped":
-		return "⏭️"
-	default:
-		return "⏳"
-	}
+	return statusIcon(status)
 }

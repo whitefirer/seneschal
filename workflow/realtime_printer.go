@@ -89,8 +89,8 @@ func (s *stateStore) flushRunning() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.m {
-		if r.status == "running" {
-			r.status = "completed"
+		if r.status == StatusRunning {
+			r.status = StatusCompleted
 		}
 	}
 }
@@ -155,6 +155,31 @@ func (p *RealtimePrinter) SetEventChannel(ch chan ProgressEvent) {
 	p.EventCh = ch
 }
 
+// EventChannel returns the channel the Executor pushes progress events into
+// (EventStreamer interface).
+func (p *RealtimePrinter) EventChannel() chan ProgressEvent {
+	return p.EventCh
+}
+
+// ── Printer interface (no-ops) ──────────────────────────────────────────────
+// The TUI renders entirely from the event channel; the Executor's direct
+// Print* calls are intentionally ignored here. Its lifecycle lives in
+// Run/Stop (Runner interface) instead.
+
+func (p *RealtimePrinter) PrintHeader(*Workflow) {}
+func (p *RealtimePrinter) PrintStep(Step, int)   {}
+func (p *RealtimePrinter) PrintStepResult(string, string, string, string, int) {
+}
+func (p *RealtimePrinter) PrintFooter(*WorkflowResult, string, string) {}
+func (p *RealtimePrinter) PrintShell(string, string, int)              {}
+func (p *RealtimePrinter) PrintLog(string, string, string, int)        {}
+func (p *RealtimePrinter) PrintHTTPRequest(string, string)             {}
+func (p *RealtimePrinter) PrintHTTPCall(string, string, int, time.Duration) {
+}
+func (p *RealtimePrinter) PrintCondition(string, bool) {}
+func (p *RealtimePrinter) PrintSleep(string)           {}
+func (p *RealtimePrinter) PrintForeach(int, string)    {}
+
 // Run starts the bubbletea TUI on the current goroutine. It blocks until the user quits.
 func (p *RealtimePrinter) Run() {
 	res, sTime, eTime := p.resultSnapshot()
@@ -174,7 +199,7 @@ func (p *RealtimePrinter) Run() {
 	if _, err := prog.Run(); err != nil {
 		res, sTime, eTime = p.resultSnapshot()
 		if res != nil {
-			printFinalResult(p.sty, p.tuiStyle, res, sTime, eTime)
+			fmt.Print(renderFinalResult(p.sty, p.tuiStyle, res, sTime, eTime))
 		}
 	}
 }
@@ -430,12 +455,12 @@ func (m *model) listView() string {
 	for _, s := range steps {
 		if s.depth == 0 {
 			parentTotal++
-			switch s.status {
-			case "completed", "success", "done":
+			switch {
+			case isSuccessStatus(s.status):
 				doneC++
-			case "failed":
+			case s.status == StatusFailed:
 				failC++
-			case "running":
+			case s.status == StatusRunning:
 				runC++
 			}
 		}
@@ -632,43 +657,7 @@ func (m *model) finalView() string {
 	if m.result == nil {
 		return ""
 	}
-
-	ok, bad := 0, 0
-	for _, s := range m.result.Steps {
-		if s.Status == "failed" {
-			bad++
-		} else {
-			ok++
-		}
-	}
-
-	statusStyle := m.sty.Success()
-	statusIcon := "✓"
-	statusLabel := "SUCCESS"
-	if m.result.Status == "failed" {
-		statusStyle = m.sty.Error()
-		statusIcon = "✗"
-		statusLabel = "FAILED"
-	}
-
-	st, _ := time.Parse(time.RFC3339, m.startTime)
-	et, _ := time.Parse(time.RFC3339, m.endTime)
-	dur := et.Sub(st).Round(time.Millisecond).String()
-
-	var lines []string
-	lines = append(lines, statusStyle.Bold(true).Render(fmt.Sprintf("  %s %s", statusIcon, statusLabel)))
-	lines = append(lines, fmt.Sprintf("  %s/%s steps · %s",
-		m.sty.Success().Render(fmt.Sprintf("%d", ok)),
-		m.sty.Gray().Render(fmt.Sprintf("%d", len(m.result.Steps))),
-		m.sty.Info().Render(dur)))
-	if bad > 0 {
-		lines = append(lines, m.sty.Error().Render(fmt.Sprintf("  %d failed", bad)))
-	}
-
-	if m.tuiStyle == "claude" {
-		return strings.Join(lines, "\n") + "\n\n"
-	}
-	return m.sty.BoxStyle().Render(strings.Join(lines, "\n")) + "\n\n"
+	return renderFinalResult(m.sty, m.tuiStyle, m.result, m.startTime, m.endTime)
 }
 
 // ── Step lines ──────────────────────────────────────────────────────────────
@@ -681,12 +670,12 @@ func (m *model) stepLine(s stepRec, childStats string, sel bool, fullW int) stri
 	}
 
 	icon := m.sty.Gray().Render("○")
-	switch s.status {
-	case "completed", "success", "done":
+	switch {
+	case isSuccessStatus(s.status):
 		icon = m.sty.Success().Render("✓")
-	case "failed":
+	case s.status == StatusFailed:
 		icon = m.sty.Error().Render("✗")
-	case "running":
+	case s.status == StatusRunning:
 		icon = m.sty.Warning().Render(spin[m.frame])
 	}
 
@@ -722,12 +711,12 @@ func (m *model) shortStepLine(s stepRec, sel bool) string {
 	}
 
 	icon := "○"
-	switch s.status {
-	case "completed", "success", "done":
+	switch {
+	case isSuccessStatus(s.status):
 		icon = "✓"
-	case "failed":
+	case s.status == StatusFailed:
 		icon = "✗"
-	case "running":
+	case s.status == StatusRunning:
 		icon = spin[m.frame]
 	}
 
@@ -747,26 +736,17 @@ func hermesLine(content string, width int, style string) string {
 	return content
 }
 
+// actionIconTUI returns the canonical action glyph (see printer.go) colored
+// by action category for the TUI.
 func actionIconTUI(act string, sty *ThemeStyle) string {
+	glyph := actionIcon(act)
 	switch act {
-	case "shell":
-		return sty.Info().Render("◇")
-	case "http":
-		return sty.Info().Render("○")
-	case "log":
-		return sty.Gray().Render("◆")
-	case "sleep":
-		return sty.Gray().Render("◌")
+	case "shell", "http", "parallel", "foreach", "loop":
+		return sty.Info().Render(glyph)
 	case "condition":
-		return sty.Warning().Render("◇")
-	case "set":
-		return sty.Gray().Render("◦")
-	case "parallel":
-		return sty.Info().Render("◎")
-	case "foreach", "loop":
-		return sty.Info().Render("◈")
+		return sty.Warning().Render(glyph)
 	}
-	return sty.Gray().Render("◦")
+	return sty.Gray().Render(glyph)
 }
 
 func truncS(s string, n int) string {
@@ -780,12 +760,12 @@ func truncS(s string, n int) string {
 }
 
 func statusRender(st string, sty *ThemeStyle) string {
-	switch st {
-	case "completed", "success", "done":
+	switch {
+	case isSuccessStatus(st):
 		return sty.Success().Render(st)
-	case "failed":
+	case st == StatusFailed:
 		return sty.Error().Render(st)
-	case "running":
+	case st == StatusRunning:
 		return sty.Warning().Render(st)
 	}
 	return sty.Gray().Render(st)
@@ -813,46 +793,4 @@ func stripAnsi(s string) string {
 
 func termWidth(s string) int {
 	return len([]rune(stripAnsi(s)))
-}
-
-func printFinalResult(sty *ThemeStyle, tuiStyle string, result *WorkflowResult, startTime, endTime string) {
-	ok, bad := 0, 0
-	for _, s := range result.Steps {
-		if s.Status == "failed" {
-			bad++
-		} else {
-			ok++
-		}
-	}
-	st, _ := time.Parse(time.RFC3339, startTime)
-	et, _ := time.Parse(time.RFC3339, endTime)
-	dur := et.Sub(st).Round(time.Millisecond).String()
-
-	statusStyle := sty.Success()
-	statusIcon := "✓"
-	statusLabel := "SUCCESS"
-	if result.Status == "failed" {
-		statusStyle = sty.Error()
-		statusIcon = "✗"
-		statusLabel = "FAILED"
-	}
-
-	var lines []string
-	lines = append(lines, statusStyle.Bold(true).Render(fmt.Sprintf("  %s %s", statusIcon, statusLabel)))
-	lines = append(lines, fmt.Sprintf("  %s/%s steps · %s",
-		sty.Success().Render(fmt.Sprintf("%d", ok)),
-		sty.Gray().Render(fmt.Sprintf("%d", len(result.Steps))),
-		sty.Info().Render(dur)))
-	if bad > 0 {
-		lines = append(lines, sty.Error().Render(fmt.Sprintf("  %d failed", bad)))
-	}
-
-	if tuiStyle == "claude" {
-		for _, l := range lines {
-			fmt.Println(l)
-		}
-	} else {
-		fmt.Println(sty.BoxStyle().Render(strings.Join(lines, "\n")))
-	}
-	fmt.Println()
 }

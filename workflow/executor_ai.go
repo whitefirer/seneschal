@@ -92,10 +92,11 @@ func injectInputs(prompt string, inputs map[string]string) string {
 	return sb.String()
 }
 
-// execAI runs the "ai" action. In TUI mode (realtimePrinter set) it streams
-// tokens and emits ai_token events for incremental display; otherwise it
-// completes non-streaming and returns the full text. The generated text is
-// stored via step.SaveOutput (if set) and returned as the step output.
+// execAI runs the "ai" action. In TUI mode (an EventStreamer printer is
+// active) it streams tokens and emits ai_token events for incremental display;
+// otherwise it completes non-streaming and returns the full text. The
+// generated text is stored via step.SaveOutput (if set) and returned as the
+// step output.
 func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) (output string, inputTokens, outputTokens int, err error) {
 	if e.aiProvider == nil {
 		return "", 0, 0, fmt.Errorf("ai step '%s': no AI provider configured (set ai: in the workflow and ANTHROPIC_API_KEY/DEEPSEEK_API_KEY in the environment)", step.Name)
@@ -170,7 +171,7 @@ func (e *Executor) execAI(step Step, stepID string, depth int, parentID string) 
 	// view can render incrementally. Non-TUI: a single Complete call (avoids
 	// per-token logging noise in CI/plain output).
 	var resp ai.Response
-	if e.realtimePrinter != nil {
+	if _, streaming := e.printer.(EventStreamer); streaming {
 		resp, err = e.aiProvider.Stream(ctx, req, func(token string) {
 			e.sendAIToken(step.Name, stepID, step.Action, depth, parentID, token)
 		})

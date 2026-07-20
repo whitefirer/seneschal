@@ -12,7 +12,7 @@ import (
 // test runs don't spam stdout.
 func newQuietExecutor(vars map[string]string) *Executor {
 	e := NewExecutor(vars)
-	e.printer = nil
+	e.printer = NoopPrinter{}
 	return e
 }
 

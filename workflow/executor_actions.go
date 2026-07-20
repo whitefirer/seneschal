@@ -44,11 +44,7 @@ func (e *Executor) execSleep(step Step) (string, error) {
 	}
 
 	// Print sleep with pretty output
-	if e.richPrinter != nil {
-		e.richPrinter.PrintSleep(duration.String())
-	} else if e.printer != nil {
-		e.printer.PrintSleep(duration.String())
-	}
+	e.printer.PrintSleep(duration.String())
 
 	// Send sleep start event (progress indicator)
 	e.sendEvent("step_output", step.Name, stepID, "sleep", "running", fmt.Sprintf("Sleeping for %s...", duration.String()), "", 0, "", nil)
@@ -79,11 +75,7 @@ func (e *Executor) execLog(step Step) string {
 	}
 
 	// Print log with pretty output
-	if e.richPrinter != nil {
-		e.richPrinter.PrintLog(step.Name, level, msg, 0)
-	} else if e.printer != nil {
-		e.printer.PrintLog(level, msg)
-	}
+	e.printer.PrintLog(step.Name, level, msg, 0)
 
 	// Format output (note: step_output is sent by executeStep() to avoid duplication)
 	output := fmt.Sprintf("[%s] %s", strings.ToUpper(level), msg)
