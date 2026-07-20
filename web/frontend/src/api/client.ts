@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { RawExecutionLog, RawExecutionStep } from '@/types/execution'
 
 const API_BASE = '/api'
 
@@ -107,8 +108,8 @@ export const executionsApi = {
     return res.data.data || []
   },
 
-  get: async (id: string): Promise<ExecutionRecord & { logs: any[]; steps: any[] }> => {
-    const res = await api.get<APIResponse<any>>(`/executions/${id}`)
+  get: async (id: string): Promise<ExecutionRecord & { logs: RawExecutionLog[]; steps: RawExecutionStep[] }> => {
+    const res = await api.get<APIResponse<ExecutionRecord & { logs: RawExecutionLog[]; steps: RawExecutionStep[] }>>(`/executions/${id}`)
     if (!res.data.success) throw new Error(res.data.error)
     return res.data.data!
   },

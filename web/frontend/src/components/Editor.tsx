@@ -214,10 +214,13 @@ steps:
   }, [])
 
   // Graph editor functions
-  const handleGraphSave = useCallback((steps: any[]) => {
+  // 注意：WorkflowGraphEditor 传入的是 { steps } 对象而非步骤数组（既有调用形状）。
+  // 下方把它赋给 workflow.steps 后，workflowToYaml 只处理数组、对象会被静默跳过——
+  // 本次为行为保持的重构，仅按实际形状修正类型，不修复该问题（见任务报告）。
+  const handleGraphSave = useCallback((payload: { steps: any[] }) => {
     try {
       const workflow = yamlToWorkflow(content)
-      workflow.steps = steps
+      workflow.steps = payload as unknown as any[]
       const newYaml = workflowToYaml(workflow)
       setContent(newYaml)
       setMode('yaml')
@@ -243,10 +246,10 @@ steps:
     }
   }, [content, saveWorkflow])
 
-  const handleGraphRun = useCallback((steps: any[]) => {
+  const handleGraphRun = useCallback((payload: { steps: any[] }) => {
     try {
       const workflow = yamlToWorkflow(content)
-      workflow.steps = steps
+      workflow.steps = payload as unknown as any[]
       const newYaml = workflowToYaml(workflow)
       setContent(newYaml)
       setMode('yaml')

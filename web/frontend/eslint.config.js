@@ -20,11 +20,10 @@ import tseslint from 'typescript-eslint'
 //   effect/memo dependency arrays, which changes re-run cadence and is
 //   unverifiable without component tests. rules-of-hooks stays 'error'.
 //   Revisit as each component is split.
-// - ban-ts-comment → ts-nocheck/ts-expect-error need a description. Only
-//   WorkflowGraphEditor.tsx uses @ts-nocheck ("DAG 重构，类型转换中") — it is
-//   mid-refactor with ~9 real type errors (duplicate imports, two GraphNode
-//   definitions); fully typing it belongs to the component split, not this
-//   gate. Requiring a description keeps the suppression self-documenting.
+// - ban-ts-comment → ts-nocheck/ts-expect-error need a description.
+//   WorkflowGraphEditor.tsx 的 @ts-nocheck 已在组件拆分（C.8）中移除，
+//   两套 GraphNode 定义已合并到 src/types/graph.ts。该规则保持开启，
+//   防止新的无说明类型抑制回潮。
 export default tseslint.config(
   { ignores: ['dist', 'node_modules'] },
   {
