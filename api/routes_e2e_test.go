@@ -3,10 +3,18 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/gorilla/mux"
 )
+
+// muxVarRe matches gorilla/mux path variables ({name}, {path:.*}) so the
+// route-table smoke test can substitute a concrete segment.
+var muxVarRe = regexp.MustCompile(`\{[^}]+\}`)
 
 // runbookYAML is a minimal manual-trigger runbook pointing at the simple.yaml
 // workflow that setupE2E writes into the workflows dir. Pure shell — no AI.
@@ -438,5 +446,77 @@ func TestE2E_AskExecution_NoProvider(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&raw)
 	if resp.StatusCode != 503 {
 		t.Errorf("malformed body: status=%d want 503", resp.StatusCode)
+	}
+}
+
+// ── Route table smoke ─────────────────────────────────────────────────────────
+
+// muxFallthroughBody is what gorilla/mux's default NotFoundHandler
+// (http.NotFound) writes when no registered route matches. API handlers never
+// produce it — they answer with the JSON APIResponse envelope even for
+// missing resources, and the WebSocket upgrade fails with a plain 400.
+const muxFallthroughBody = "404 page not found\n"
+
+// TestE2E_RouteTableSmoke walks the route table registered by RegisterRoutes
+// (the single source shared by cmd/server/main.go and buildTestRouter) and
+// hits every route on a live test server, asserting that none of them falls
+// through to mux's default NotFoundHandler. A handler may legitimately answer
+// 404 for a missing resource — that is a JSON envelope, not the fallthrough —
+// so the test catches a route that is missing from (or unreachable in) the
+// registered table without hard-coding a scenario per route.
+func TestE2E_RouteTableSmoke(t *testing.T) {
+	e := setupE2E(t)
+	defer e.close()
+
+	// Walk a table built by the same RegisterRoutes call the server used. The
+	// zero-value handlers are never invoked through this router — requests go
+	// to the live server; this router only enumerates (method, path) pairs.
+	r := mux.NewRouter()
+	RegisterRoutes(r, &Handler{}, &RunbookHandler{})
+
+	type routeCase struct {
+		method string
+		path   string
+	}
+	var routes []routeCase
+	err := r.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
+		tpl, err := route.GetPathTemplate()
+		if err != nil {
+			return nil // not a path route — nothing to hit
+		}
+		// Fill every {var} / {var:pattern} with a dummy segment.
+		path := muxVarRe.ReplaceAllString(tpl, "smoke")
+		methods, err := route.GetMethods()
+		if err != nil || len(methods) == 0 {
+			methods = []string{http.MethodGet} // e.g. /api/ws has no method constraint
+		}
+		for _, m := range methods {
+			routes = append(routes, routeCase{method: m, path: path})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk route table: %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("RegisterRoutes registered no routes")
+	}
+
+	for _, rc := range routes {
+		t.Run(rc.method+" "+rc.path, func(t *testing.T) {
+			req, err := http.NewRequest(rc.method, e.server.URL+rc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s %s: %v", rc.method, rc.path, err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			if string(body) == muxFallthroughBody {
+				t.Errorf("%s %s fell through to mux NotFoundHandler — route not registered", rc.method, rc.path)
+			}
+		})
 	}
 }

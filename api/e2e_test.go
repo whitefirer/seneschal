@@ -55,24 +55,12 @@ func setupE2E(t *testing.T) *e2eTestServer {
 	return &e2eTestServer{server: server, hub: hub, dir: dir, runbooksDir: runbooksDir}
 }
 
-// buildTestRouter mirrors the route table in cmd/server/main.go (API routes,
-// runbook routes, /api/ws) wrapped in the same middleware chain.
+// buildTestRouter registers the shared route table (api.RegisterRoutes — the
+// same function cmd/server/main.go uses, so the test server cannot drift from
+// production) and wraps it in the same middleware chain as main.go.
 func buildTestRouter(handler *Handler, runbookHandler *RunbookHandler) http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/api/workflows", handler.ListWorkflows).Methods("GET")
-	r.HandleFunc("/api/workflows/{name}", handler.GetWorkflow).Methods("GET")
-	r.HandleFunc("/api/workflows/{name}", handler.SaveWorkflow).Methods("PUT")
-	r.HandleFunc("/api/workflows/{name}", handler.DeleteWorkflow).Methods("DELETE")
-	r.HandleFunc("/api/workflows/{name}/validate", handler.ValidateWorkflow).Methods("POST")
-	r.HandleFunc("/api/workflows/{name}/run", handler.RunWorkflow).Methods("POST")
-	r.HandleFunc("/api/executions", handler.GetExecutions).Methods("GET")
-	r.HandleFunc("/api/executions/{id}", handler.GetExecution).Methods("GET")
-	r.HandleFunc("/api/executions/{id}", handler.DeleteExecution).Methods("DELETE")
-	r.HandleFunc("/api/executions/{id}/replay", handler.ReplayExecution).Methods("POST")
-	r.HandleFunc("/api/executions/{id}/ask", handler.AskExecution).Methods("POST")
-	r.HandleFunc("/api/chat", handler.ChatHandler).Methods("POST")
-	r.HandleFunc("/api/ws", handler.WSHandler)
-	RegisterRunbookRoutes(r, runbookHandler)
+	RegisterRoutes(r, handler, runbookHandler)
 	// Mirror cmd/server/main.go: CORS then auth wrap the router. An empty
 	// ServerConfig makes both no-ops for these tests (no Origin headers are
 	// sent, and no auth token is configured).

@@ -130,25 +130,7 @@ func main() {
 	}
 	handler := api.NewHandler(hub, workflowsDir, store, aiCfg, globalHooks, cfg.CheckOrigin())
 
-	// Setup routes using gorilla/mux
-	r := mux.NewRouter()
-
-	// API routes
-	r.HandleFunc("/api/workflows", handler.ListWorkflows).Methods("GET")
-	r.HandleFunc("/api/workflows/{name}", handler.GetWorkflow).Methods("GET")
-	r.HandleFunc("/api/workflows/{name}", handler.SaveWorkflow).Methods("PUT")
-	r.HandleFunc("/api/workflows/{name}", handler.DeleteWorkflow).Methods("DELETE")
-	r.HandleFunc("/api/workflows/{name}/validate", handler.ValidateWorkflow).Methods("POST")
-	r.HandleFunc("/api/workflows/{name}/run", handler.RunWorkflow).Methods("POST")
-	r.HandleFunc("/api/executions", handler.GetExecutions).Methods("GET")
-	r.HandleFunc("/api/executions/{id}", handler.GetExecution).Methods("GET")
-	r.HandleFunc("/api/executions/{id}", handler.DeleteExecution).Methods("DELETE")
-	r.HandleFunc("/api/executions/{id}/replay", handler.ReplayExecution).Methods("POST")
-	r.HandleFunc("/api/executions/{id}/ask", handler.AskExecution).Methods("POST")
-	r.HandleFunc("/api/chat", handler.ChatHandler).Methods("POST")
-	r.HandleFunc("/api/ws", handler.WSHandler)
-
-	// Runbook routes — trigger/schedule management
+	// Runbook manager — trigger/schedule management.
 	runbookMgr := workflow.NewRunbookManager(runbooksDir, workflowsDir,
 		api.MakeTriggerCallback(store, hub, workflowsDir, aiCfg),
 		func(format string, args ...interface{}) { log.Printf(format, args...) },
@@ -156,7 +138,13 @@ func main() {
 	runbookMgr.LoadDir()
 	go runbookMgr.Watch(10 * time.Second)
 	runbookHandler := api.NewRunbookHandler(runbookMgr, runbooksDir, workflowsDir)
-	api.RegisterRunbookRoutes(r, runbookHandler)
+
+	// Setup routes using gorilla/mux. The entire API route table (including
+	// runbook routes and /api/ws) is registered by api.RegisterRoutes — the
+	// single source of truth shared with the e2e tests. Only the SPA static
+	// fallback below is registered here (it needs the embedded web FS).
+	r := mux.NewRouter()
+	api.RegisterRoutes(r, handler, runbookHandler)
 
 	// Static files - SPA with fallback to index.html
 	staticFS, err := fs.Sub(staticFiles, "static")

@@ -175,7 +175,10 @@ func (h *RunbookHandler) DeleteRunbook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, success(map[string]string{"deleted": name}))
 }
 
-// RegisterRunbookRoutes registers all runbook routes on the router.
+// RegisterRunbookRoutes registers all runbook routes on the router. It is a
+// sub-unit of RegisterRoutes (routes.go), the single composition root used by
+// both cmd/server/main.go and the e2e tests — call RegisterRoutes, not this,
+// unless you genuinely need only the runbook subset.
 func RegisterRunbookRoutes(r *mux.Router, h *RunbookHandler) {
 	r.HandleFunc("/api/runbooks", h.ListRunbooks).Methods("GET")
 	r.HandleFunc("/api/runbooks/{name}", h.GetRunbook).Methods("GET")
