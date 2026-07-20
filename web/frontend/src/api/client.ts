@@ -131,6 +131,10 @@ export interface ChatSelection {
   workflow: string
   fileName?: string          // file name for the /run API (which matches by file, not YAML name)
   variables: Record<string, string>
+  // Keys of `variables` that the workflow declares sensitive. Display masked
+  // (***) in the card; the real values in `variables` are still what /run
+  // executes on confirm, so they must not be altered.
+  sensitiveKeys?: string[]
   confidence: number
   steps?: ChatStep[]
   available?: string[]

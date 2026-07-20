@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Send, Bot, User, Loader2, Play, Sparkles, GitBranch, ChevronDown, ChevronRight, ExternalLink, X, CheckCircle, XCircle, Clock, RotateCw, FileCode } from 'lucide-react'
+import { Send, Bot, User, Loader2, Play, Sparkles, GitBranch, ChevronDown, ChevronRight, ExternalLink, X, CheckCircle, XCircle, Clock, RotateCw, FileCode, Lock } from 'lucide-react'
 import { chatApi, workflowsApi, executionsApi, type ChatSelection, type ChatStep } from '@/api/client'
 import { MarkdownView } from './MarkdownView'
 
@@ -372,16 +372,22 @@ function SelectionCard({ selection, onRun, loading, onNavigate, execId }: {
         <StepPreviewSection steps={selection.steps} />
       )}
 
-      {/* Variables — also hidden after execution to reduce noise. */}
+      {/* Variables — also hidden after execution to reduce noise. Sensitive
+          keys render masked (the real values stay in selection.variables,
+          which is what /run executes on confirm). */}
       {expanded && !execId && Object.keys(selection.variables).length > 0 && (
         <div>
           <p className="text-xs text-muted-foreground mb-1">变量:</p>
           <div className="space-y-0.5">
-            {Object.entries(selection.variables).map(([k, v]) => (
-              <div key={k} className="text-xs font-mono">
-                <span className="text-muted-foreground">{k}</span> = <span>{v}</span>
-              </div>
-            ))}
+            {Object.entries(selection.variables).map(([k, v]) => {
+              const masked = selection.sensitiveKeys?.includes(k) ?? false
+              return (
+                <div key={k} className="text-xs font-mono">
+                  <span className="text-muted-foreground">{k}</span> = <span>{masked ? '***' : v}</span>
+                  {masked && <Lock className="inline-block w-3 h-3 ml-1 text-muted-foreground" />}
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

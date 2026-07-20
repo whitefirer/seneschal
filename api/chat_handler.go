@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -370,11 +371,41 @@ func (e *chatToolExecutor) enrichSelection(raw string) map[string]interface{} {
 			data["fileName"] = entry.FileName
 			if wf, _, err := e.registry.Get(sel.Workflow); err == nil {
 				data["steps"] = buildStepSummary(wf.Steps)
+				// The card's variable values double as the execution values
+				// (the frontend passes them to /run on confirm), so they must
+				// stay real in the payload. Ship the matched sensitive keys
+				// alongside and let the frontend mask at display time.
+				if keys := sensitiveDisplayKeys(sel.Variables, wf.Sensitive); len(keys) > 0 {
+					data["sensitiveKeys"] = keys
+				}
 			}
 			break
 		}
 	}
 	return data
+}
+
+// sensitiveDisplayKeys returns the subset of vars keys matching the
+// workflow's sensitive: patterns, sorted for a stable payload. The selection
+// card masks those values at display time ("***"); the variables in the
+// event stay real because the frontend posts them back to
+// /api/workflows/{name}/run when the user confirms — masking them here would
+// execute the workflow with a literal "***". A key whose suggested value
+// already IS "***" escapes the diff, which is harmless: it displays as "***"
+// either way.
+func sensitiveDisplayKeys(vars map[string]string, patterns []string) []string {
+	if len(vars) == 0 || len(patterns) == 0 {
+		return nil
+	}
+	masked := workflow.MaskVariables(vars, patterns)
+	keys := make([]string, 0, len(vars))
+	for k, v := range vars {
+		if masked[k] != v {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // entriesToCandidates converts DirRegistry entries to assistant candidates.
