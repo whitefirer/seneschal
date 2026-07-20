@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,13 +54,21 @@ func (h *RunbookHandler) TriggerRunbook(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if err := h.manager.Trigger(name, extraVars); err != nil {
+	execID, err := h.manager.Trigger(name, extraVars)
+	if err != nil {
+		// Pre-dispatch failures are client errors (unknown runbook, not
+		// manually triggerable); a dispatch failure means the runbook's
+		// workflow reference is broken server-side.
+		if errors.Is(err, workflow.ErrTriggerDispatch) {
+			writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorResp(err.Error()))
 		return
 	}
 	resp := map[string]string{"status": "triggered", "runbook": name}
-	if id := extraVars[triggerExecIDKey]; id != "" {
-		resp["executionId"] = id
+	if execID != "" {
+		resp["executionId"] = execID
 	}
 	writeJSON(w, http.StatusOK, success(resp))
 }
@@ -71,23 +80,26 @@ func (h *RunbookHandler) TriggerByPath(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.manager.TriggerByPath(path, extraVars); err != nil {
+	execID, err := h.manager.TriggerByPath(path, extraVars)
+	if err != nil {
+		if errors.Is(err, workflow.ErrTriggerDispatch) {
+			writeJSON(w, http.StatusInternalServerError, errorResp(err.Error()))
+			return
+		}
 		writeJSON(w, http.StatusNotFound, errorResp(err.Error()))
 		return
 	}
 	resp := map[string]string{"status": "triggered", "path": path}
-	if id := extraVars[triggerExecIDKey]; id != "" {
-		resp["executionId"] = id
+	if execID != "" {
+		resp["executionId"] = execID
 	}
 	writeJSON(w, http.StatusOK, success(resp))
 }
 
 // readTriggerExtraVars reads the optional JSON body of extra variables for a
 // trigger request, capped at maxRequestBodyBytes. It always returns a non-nil
-// map with any client-supplied execution-ID key stripped, so the trigger
-// callback can hand the generated execution ID back through it (the manager
-// invokes the callback synchronously with this same map). ok is false when
-// the body could not be read; the error response has already been written.
+// map. ok is false when the body could not be read; the error response has
+// already been written.
 func readTriggerExtraVars(w http.ResponseWriter, r *http.Request) (vars map[string]string, ok bool) {
 	vars = make(map[string]string)
 	if r.Body == nil {
@@ -106,7 +118,6 @@ func readTriggerExtraVars(w http.ResponseWriter, r *http.Request) (vars map[stri
 			vars = make(map[string]string)
 		}
 	}
-	delete(vars, triggerExecIDKey)
 	return vars, true
 }
 
@@ -174,54 +185,41 @@ func RegisterRunbookRoutes(r *mux.Router, h *RunbookHandler) {
 	r.HandleFunc("/api/triggers/{path:.*}", h.TriggerByPath).Methods("POST")
 }
 
-// triggerCallback is the function called when a runbook fires.
-// It's set by the server to wire up executor execution.
-type TriggerCallback func(rb *workflow.RunbookConfig, extraVars map[string]string)
-
-// triggerExecIDKey is a reserved extraVars key the trigger callback uses to
-// hand the generated execution ID back to the HTTP handler that fired the
-// trigger. It is control metadata — never merged into workflow variables —
-// and the HTTP handlers strip any client-supplied value before dispatching.
-const triggerExecIDKey = "__seneschal_execution_id"
-
 // MakeTriggerCallback creates a TriggerFunc that executes the runbook's
-// workflow. The execution ID is generated synchronously and, when extraVars
-// is non-nil, written back into it under triggerExecIDKey so the triggering
-// HTTP handler can return it to the client; the run itself stays async.
+// workflow. The execution ID is generated synchronously and returned to the
+// caller (the HTTP trigger handler reports it to the client, the cron
+// scheduler logs it); the run itself stays async and its snapshot is
+// persisted on completion.
+//
+// The hub and aiCfg parameters are reserved for the upcoming WS broadcast of
+// runbook trigger events (and AI-assisted trigger handling). They are
+// intentionally unused today — kept so the integration seam stays stable;
+// do not remove them.
 func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir string, aiCfg workflow.AIConfig) workflow.TriggerFunc {
-	return func(rb *workflow.RunbookConfig, extraVars map[string]string) {
+	return func(rb *workflow.RunbookConfig, extraVars map[string]string) (string, error) {
 		// Resolve workflow path.
 		wfPath, err := resolveWorkflowPath(rb, workflowsDir)
 		if err != nil {
-			fmt.Printf("⚠️ runbook %s: %v\n", rb.Name, err)
-			return
+			return "", fmt.Errorf("runbook %s: %w", rb.Name, err)
 		}
 		wf, err := workflow.ParseFile(wfPath)
 		if err != nil {
-			fmt.Printf("⚠️ runbook %s: parse workflow: %v\n", rb.Name, err)
-			return
+			return "", fmt.Errorf("runbook %s: parse workflow: %w", rb.Name, err)
 		}
 
-		// Merge variables: runbook defaults + trigger extra vars (minus the
-		// reserved execution-ID key, which is control metadata).
+		// Merge variables: runbook defaults + trigger extra vars.
 		vars := make(map[string]string)
 		for k, v := range rb.Variables {
 			vars[k] = v
 		}
 		for k, v := range extraVars {
-			if k == triggerExecIDKey {
-				continue
-			}
 			vars[k] = v
 		}
 
-		// Generate the execution ID up front and hand it back through
-		// extraVars. Unique per trigger — the old runbook-<name>-<pid>
-		// scheme collided when a runbook fired more than once per process.
+		// Generate the execution ID up front. Unique per trigger — the old
+		// runbook-<name>-<pid> scheme collided when a runbook fired more than
+		// once per process.
 		execID := fmt.Sprintf("runbook-%s-%s", rb.Name, randomHex(4))
-		if extraVars != nil {
-			extraVars[triggerExecIDKey] = execID
-		}
 
 		// Execute in background.
 		go func() {
@@ -246,6 +244,7 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 				})
 			}
 		}()
+		return execID, nil
 	}
 }
 

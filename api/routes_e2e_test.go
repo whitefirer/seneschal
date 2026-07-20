@@ -140,6 +140,79 @@ func TestE2E_TriggerRunbook_NotFound(t *testing.T) {
 	}
 }
 
+func TestE2E_TriggerRunbook_DispatchFailure(t *testing.T) {
+	e := setupE2E(t)
+	defer e.close()
+
+	// The runbook is valid YAML with a workflow reference, so SaveRunbook
+	// accepts it — but ghost.yaml does not exist, so the trigger callback
+	// fails to dispatch. That is a server-side configuration problem, not a
+	// client error: the handler maps it (via workflow.ErrTriggerDispatch)
+	// to 500.
+	broken := `name: broken
+workflow: ghost.yaml
+triggers:
+  - type: manual
+`
+	if code, result := e.put("/api/runbooks/broken.yaml", broken); code != 200 {
+		t.Fatalf("save status=%d result=%v", code, result)
+	}
+
+	code, result := e.post("/api/runbooks/broken/trigger", map[string]interface{}{})
+	if code != 500 {
+		t.Fatalf("trigger status=%d want 500 result=%v", code, result)
+	}
+	if msg, _ := result["error"].(string); !strings.Contains(msg, "ghost.yaml") {
+		t.Errorf("error=%q want it to mention the missing workflow file", msg)
+	}
+}
+
+// ── Webhook triggers ─────────────────────────────────────────────────────────
+
+const webhookRunbookYAML = `name: hooked
+workflow: simple.yaml
+triggers:
+  - type: webhook
+    path: /deploy-hook
+`
+
+func TestE2E_TriggerByPath(t *testing.T) {
+	e := setupE2E(t)
+	defer e.close()
+
+	if code, result := e.put("/api/runbooks/hooked.yaml", webhookRunbookYAML); code != 200 {
+		t.Fatalf("save status=%d result=%v", code, result)
+	}
+
+	// Unknown webhook path → 404 (no runbook matches).
+	if code, _ := e.post("/api/triggers/no-such-hook", map[string]interface{}{}); code != 404 {
+		t.Errorf("unknown path: status=%d want 404", code)
+	}
+
+	// A matching path fires the runbook and returns its execution ID, just
+	// like the manual trigger endpoint.
+	code, result := e.post("/api/triggers/deploy-hook", map[string]interface{}{"env": "staging"})
+	if code != 200 {
+		t.Fatalf("trigger status=%d result=%v", code, result)
+	}
+	data, _ := result["data"].(map[string]interface{})
+	if s, _ := data["status"].(string); s != "triggered" {
+		t.Errorf("status=%q want triggered", s)
+	}
+	execID, _ := data["executionId"].(string)
+	if execID == "" {
+		t.Fatal("expected a non-empty executionId in the response")
+	}
+
+	exec := e.pollExecution(execID)
+	if exec == nil {
+		t.Fatalf("webhook execution %s never completed", execID)
+	}
+	if st, _ := exec["status"].(string); st != "success" {
+		t.Errorf("webhook execution status=%q want success", st)
+	}
+}
+
 func TestE2E_SaveRunbook_InvalidYAML(t *testing.T) {
 	e := setupE2E(t)
 	defer e.close()

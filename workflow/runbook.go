@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,8 +39,17 @@ type RunbookConfig struct {
 }
 
 // TriggerFunc is the callback invoked when a runbook is triggered.
-// The executor uses this to start the workflow.
-type TriggerFunc func(rb *RunbookConfig, extraVars map[string]string)
+// It returns the ID of the execution it started (empty when none was
+// started), or an error when the trigger could not be dispatched — e.g. the
+// referenced workflow file is missing or unparseable.
+type TriggerFunc func(rb *RunbookConfig, extraVars map[string]string) (execID string, err error)
+
+// ErrTriggerDispatch wraps an error returned by the TriggerFunc callback
+// itself, distinguishing server-side dispatch failures (broken workflow
+// reference, parse error) from pre-dispatch validation errors (unknown
+// runbook, no manual/webhook trigger, unknown webhook path). Callers can
+// branch on it with errors.Is.
+var ErrTriggerDispatch = errors.New("trigger dispatch failed")
 
 // RunbookManager loads, watches, and dispatches runbooks.
 type RunbookManager struct {
@@ -167,13 +177,15 @@ func (m *RunbookManager) ResolveWorkflowPath(rb *RunbookConfig) (string, error) 
 	return "", fmt.Errorf("workflow file not found: %s (tried %s, %s)", wfPath, m.dir, m.workflowsDir)
 }
 
-// Trigger fires a runbook manually or from webhook.
-func (m *RunbookManager) Trigger(name string, extraVars map[string]string) error {
+// Trigger fires a runbook manually or from webhook. It returns the execution
+// ID reported by the trigger callback. Errors from the callback are wrapped
+// with ErrTriggerDispatch; lookup/policy failures are plain errors.
+func (m *RunbookManager) Trigger(name string, extraVars map[string]string) (string, error) {
 	m.mu.RLock()
 	rb := m.runbooks[name]
 	m.mu.RUnlock()
 	if rb == nil {
-		return fmt.Errorf("runbook %q not found", name)
+		return "", fmt.Errorf("runbook %q not found", name)
 	}
 	// Check it has a manual or webhook trigger (or no triggers = manual-only).
 	if len(rb.Triggers) > 0 {
@@ -185,30 +197,40 @@ func (m *RunbookManager) Trigger(name string, extraVars map[string]string) error
 			}
 		}
 		if !hasManual {
-			return fmt.Errorf("runbook %q has no manual/webhook trigger", name)
+			return "", fmt.Errorf("runbook %q has no manual/webhook trigger", name)
 		}
 	}
-	if m.trigger != nil {
-		m.trigger(rb, extraVars)
+	if m.trigger == nil {
+		return "", nil
 	}
-	return nil
+	execID, err := m.trigger(rb, extraVars)
+	if err != nil {
+		return "", fmt.Errorf("runbook %q: %w: %v", name, ErrTriggerDispatch, err)
+	}
+	return execID, nil
 }
 
-// TriggerByPath fires a runbook by its webhook path.
-func (m *RunbookManager) TriggerByPath(path string, extraVars map[string]string) error {
+// TriggerByPath fires a runbook by its webhook path. It returns the execution
+// ID reported by the trigger callback. Errors from the callback are wrapped
+// with ErrTriggerDispatch; an unknown path is a plain error.
+func (m *RunbookManager) TriggerByPath(path string, extraVars map[string]string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, rb := range m.runbooks {
 		for _, t := range rb.Triggers {
 			if t.Type == TriggerWebhook && t.Path == path {
-				if m.trigger != nil {
-					m.trigger(rb, extraVars)
+				if m.trigger == nil {
+					return "", nil
 				}
-				return nil
+				execID, err := m.trigger(rb, extraVars)
+				if err != nil {
+					return "", fmt.Errorf("runbook %q: %w: %v", rb.Name, ErrTriggerDispatch, err)
+				}
+				return execID, nil
 			}
 		}
 	}
-	return fmt.Errorf("no runbook with webhook path %q", path)
+	return "", fmt.Errorf("no runbook with webhook path %q", path)
 }
 
 // ── Cron scheduling ───────────────────────────────────────────────────────────
@@ -241,7 +263,14 @@ func (m *RunbookManager) runCron(key string, rb *RunbookConfig, interval time.Du
 		select {
 		case <-ticker.C:
 			if m.trigger != nil {
-				m.trigger(rb, nil)
+				execID, err := m.trigger(rb, nil)
+				if err != nil {
+					// A failing trigger used to vanish into stdout; surface it
+					// through logFunc so the scheduler has visibility.
+					m.logFunc("⚠️ runbook %s: trigger failed: %v", rb.Name, err)
+				} else {
+					m.logFunc("📋 runbook %s fired (execution %s)", rb.Name, execID)
+				}
 			}
 		case <-stopCh:
 			return

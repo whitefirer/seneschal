@@ -74,7 +74,7 @@ func setupRunbookHandler(t *testing.T) (*RunbookHandler, string, string) {
 		t.Fatal(err)
 	}
 	mgr := workflow.NewRunbookManager(runbooksDir, workflowsDir,
-		func(*workflow.RunbookConfig, map[string]string) {}, nil)
+		func(*workflow.RunbookConfig, map[string]string) (string, error) { return "", nil }, nil)
 	return NewRunbookHandler(mgr, runbooksDir, workflowsDir), runbooksDir, base
 }
 
