@@ -31,7 +31,9 @@ jobs:
         run: go build ./...
 
       - name: go test -race
-        run: go test -race ./...
+        # Explicit packages: ./... would also scan web/frontend/node_modules
+        # (some npm packages ship Go sources).
+        run: go test -race ./api/... ./cmd/... ./config/... ./workflow/...
 
   frontend:
     runs-on: ubuntu-latest
@@ -50,8 +52,14 @@ jobs:
       - name: install
         run: npm ci
 
+      - name: lint
+        run: npm run lint
+
       - name: typecheck
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: test
+        run: npm test
 
       - name: build
         run: npm run build
