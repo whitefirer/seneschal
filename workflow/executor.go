@@ -736,35 +736,60 @@ func (e *Executor) topologicalSort(graph map[string]*DAGNode) ([]string, error) 
 	return result, nil
 }
 
-// executeDAG executes workflow in DAG mode with parallel execution support
-func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
-	graph, err := e.buildDAGGraph(wf.Steps)
-	if err != nil {
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("build DAG graph: %v", err)
-		return
+// isContainerAction reports whether the action is a container (condition,
+// parallel, foreach, loop) whose children are scheduled as a sub-DAG via
+// executeContainerDAG rather than dispatched through executeStep.
+func isContainerAction(action string) bool {
+	switch action {
+	case "condition", "parallel", "foreach", "loop":
+		return true
 	}
+	return false
+}
 
-	// Get execution order
-	order, err := e.topologicalSort(graph)
-	if err != nil {
-		result.Status = "failed"
-		result.Error = fmt.Sprintf("topological sort: %v", err)
-		return
-	}
+// waveConfig parameterizes one DAG wave schedule (runWaves). The three call
+// sites — top-level executeDAG, executeContainerDAG (condition/parallel
+// children), and executeForeach (per-iteration do-steps) — share the same
+// scheduling skeleton and differ only in the knobs below.
+type waveConfig struct {
+	graph map[string]*DAGNode
+	order []string // topological order (also determines first-wave ordering)
+	// exec runs one node; it owns the container-vs-plain dispatch and the
+	// depth/parentID (and, for foreach, the per-iteration step ID rewrite).
+	exec func(node *DAGNode) StepResult
+	// collect is called once per finished node, in ready order, after its
+	// wave completes (append to result.Steps / container children, ...).
+	collect func(id string, sr *StepResult)
+	// failError builds the first-failure message for a failed node
+	// (each call site has its own wording).
+	failError func(sr *StepResult) string
+	// checkCancel makes runWaves stop scheduling new waves once the run is
+	// canceled (top-level DAG only).
+	checkCancel bool
+	// joinAny enables join_mode: any (top-level DAG only; container and
+	// foreach sub-DAGs historically only support join_mode: all).
+	joinAny bool
+	// markSkipped, if set, is called for every still-waiting node when the
+	// schedule ends in failure (top-level DAG synthesizes skipped results).
+	markSkipped func(id string)
+}
 
+// runWaves executes a DAG in waves: all dependency-free nodes run
+// concurrently, then the next wave is computed from what completed. It
+// returns (failed, firstErr); failure stops scheduling (unless every failure
+// so far had continue_on_error).
+func (e *Executor) runWaves(cfg waveConfig) (failed bool, firstErr string) {
 	// Track completed nodes and their results
 	completed := make(map[string]*StepResult)
-	completedMutex := sync.Mutex{}
 
 	// Track nodes waiting for dependencies
 	waiting := make(map[string][]string) // nodeID -> pending dependencies
 
 	// Initialize waiting list
-	for id, node := range graph {
+	for id, node := range cfg.graph {
 		pending := []string{}
 		for _, dep := range node.DependsOn {
-			if _, ok := graph[dep]; ok {
+			if _, ok := cfg.graph[dep]; ok {
 				pending = append(pending, dep)
 			}
 		}
@@ -775,22 +800,21 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 
 	// Find entry nodes (no dependencies)
 	ready := []string{}
-	for _, id := range order {
+	for _, id := range cfg.order {
 		if len(waiting[id]) == 0 {
 			ready = append(ready, id)
 		}
 	}
 
 	// Execute in waves (parallel execution of independent nodes)
-	hasError := false
-	firstErr := ""
-
-	for len(ready) > 0 && !hasError {
+	for len(ready) > 0 && !failed {
 		// Stop scheduling new waves once the run is canceled (e.g. TUI quit).
-		if err := e.executionContext().Err(); err != nil {
-			hasError = true
-			firstErr = "workflow canceled"
-			break
+		if cfg.checkCancel {
+			if err := e.executionContext().Err(); err != nil {
+				failed = true
+				firstErr = "workflow canceled"
+				break
+			}
 		}
 
 		// Execute all ready nodes concurrently
@@ -803,16 +827,7 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 			go func(nodeID string) {
 				defer wg.Done()
 
-				node := graph[nodeID]
-				var stepResult StepResult
-
-				// 如果是容器节点，递归执行子 DAG
-				if node.Step.Action == "condition" || node.Step.Action == "parallel" ||
-					node.Step.Action == "foreach" || node.Step.Action == "loop" {
-					stepResult = e.executeContainerDAG(node.Step, 0, result, "")
-				} else {
-					stepResult = e.executeStep(node.Step, 0, result, "")
-				}
+				stepResult := cfg.exec(cfg.graph[nodeID])
 
 				resultsMutex.Lock()
 				waveResults[nodeID] = &stepResult
@@ -825,26 +840,20 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 		// Process wave results
 		for _, id := range ready {
 			sr := waveResults[id]
-			result.Steps = append(result.Steps, *sr)
 
-			completedMutex.Lock()
+			cfg.collect(id, sr)
+
 			completed[id] = sr
-			completedMutex.Unlock()
 
-			// Update variables (use Snapshot to avoid racing concurrent Set calls)
-			for k, v := range e.context.Snapshot() {
-				result.Variables[k] = v
-			}
-
-			if sr.Status == "failed" && !graph[id].Step.ContinueOnError {
-				hasError = true
+			if sr.Status == "failed" && !cfg.graph[id].Step.ContinueOnError {
+				failed = true
 				if firstErr == "" {
-					firstErr = fmt.Sprintf("step '%s' failed: %s", sr.Name, sr.Error)
+					firstErr = cfg.failError(sr)
 				}
 			}
 		}
 
-		if hasError {
+		if failed {
 			break
 		}
 
@@ -863,7 +872,7 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 				// All dependencies completed, this node is ready
 				newReady = append(newReady, id)
 				delete(waiting, id)
-			} else if graph[id].JoinMode == "any" {
+			} else if cfg.joinAny && cfg.graph[id].JoinMode == "any" {
 				// "any" mode: at least one dependency completed
 				anyCompleted := false
 				for _, dep := range pending {
@@ -885,21 +894,69 @@ func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
 		ready = newReady
 	}
 
-	// Handle remaining waiting nodes (if error occurred)
-	if hasError {
-		result.Status = "failed"
-		result.Error = firstErr
-
-		// Mark remaining nodes as skipped
+	// Mark remaining waiting nodes as skipped (if the call site wants that).
+	if failed && cfg.markSkipped != nil {
 		for id := range waiting {
-			sr := StepResult{
+			cfg.markSkipped(id)
+		}
+	}
+
+	return failed, firstErr
+}
+
+// executeDAG executes workflow in DAG mode with parallel execution support
+func (e *Executor) executeDAG(wf *Workflow, result *WorkflowResult) {
+	graph, err := e.buildDAGGraph(wf.Steps)
+	if err != nil {
+		result.Status = "failed"
+		result.Error = fmt.Sprintf("build DAG graph: %v", err)
+		return
+	}
+
+	// Get execution order
+	order, err := e.topologicalSort(graph)
+	if err != nil {
+		result.Status = "failed"
+		result.Error = fmt.Sprintf("topological sort: %v", err)
+		return
+	}
+
+	failed, firstErr := e.runWaves(waveConfig{
+		graph: graph,
+		order: order,
+		exec: func(node *DAGNode) StepResult {
+			// 如果是容器节点，递归执行子 DAG
+			if isContainerAction(node.Step.Action) {
+				return e.executeContainerDAG(node.Step, 0, result, "")
+			}
+			return e.executeStep(node.Step, 0, result, "")
+		},
+		collect: func(id string, sr *StepResult) {
+			result.Steps = append(result.Steps, *sr)
+			// Update variables (use Snapshot to avoid racing concurrent Set calls)
+			for k, v := range e.context.Snapshot() {
+				result.Variables[k] = v
+			}
+		},
+		failError: func(sr *StepResult) string {
+			return fmt.Sprintf("step '%s' failed: %s", sr.Name, sr.Error)
+		},
+		checkCancel: true,
+		joinAny:     true,
+		markSkipped: func(id string) {
+			result.Steps = append(result.Steps, StepResult{
 				Name:   graph[id].Step.Name,
 				ID:     id,
 				Status: "skipped",
 				Error:  "skipped due to previous failure",
-			}
-			result.Steps = append(result.Steps, sr)
-		}
+			})
+		},
+	})
+
+	// Handle failure (remaining waiting nodes were already marked as skipped)
+	if failed {
+		result.Status = "failed"
+		result.Error = firstErr
 	}
 
 	// Propagate nondeterminism: any step that consumes the output of an
@@ -1015,7 +1072,6 @@ func (e *Executor) executeStepOnce(step Step, depth int, wfResult *WorkflowResul
 	var err error
 	var output string
 	var children []StepResult
-	var condResult bool
 
 	// Step-level retry: repeat the dispatch up to step.Retry+1 times on
 	// failure. Only the dispatch is retried — save_output / context.Set happen
@@ -1066,19 +1122,6 @@ errorRecovery:
 				output, err = e.execHTTP(step)
 				result.HTTPUrl = step.URL
 				result.HTTPMethod = step.Method
-			case "condition":
-				var execChildren, skippedChildren []StepResult
-				output, execChildren, skippedChildren, condResult, err = e.execCondition(step, depth, wfResult, stepID)
-				result.ConditionResult = &condResult
-				result.Expression = step.Expression
-				if condResult {
-					result.ThenChildren = execChildren
-					result.ElseChildren = skippedChildren
-				} else {
-					result.ElseChildren = execChildren
-					result.ThenChildren = skippedChildren
-				}
-				children = nil
 			case "set":
 				output, err = e.execSet(step)
 			case "sleep":
@@ -1087,17 +1130,8 @@ errorRecovery:
 			case "log":
 				output = e.execLog(step)
 				result.LogMessage = step.Message
-			case "parallel":
-				output, children, err = e.execParallel(step, depth, wfResult, stepID)
 			case "template":
 				output, err = e.execTemplate(step)
-			case "foreach":
-				sr := e.executeForeach(step, depth, wfResult, stepID)
-				output = sr.Output
-				children = sr.Children
-				if sr.Status == "failed" {
-					err = fmt.Errorf("%s", sr.Error)
-				}
 			case "ai":
 				var inTok, outTok int
 				output, inTok, outTok, err = e.execAI(step, stepID, depth, parentID)
@@ -1194,7 +1228,9 @@ errorRecovery:
 		break errorRecovery
 	} // end errorRecovery
 
-	// Set children for parallel/foreach/condition
+	// Set children (currently only the workflow action produces child results;
+	// container actions never reach this dispatch — the wave schedulers route
+	// them to executeContainerDAG).
 	result.Children = children
 
 	// 填充确定性标记初值(见 docs/PRODUCT.md 的"三种确定性层级")

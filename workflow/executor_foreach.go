@@ -3,7 +3,6 @@ package workflow
 import (
 	"fmt"
 	"strings"
-	"sync"
 )
 
 func (e *Executor) executeForeach(container Step, depth int, result *WorkflowResult, parentID string) StepResult {
@@ -78,126 +77,37 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 		}
 
 		// 执行迭代内的步骤
-		completed := make(map[string]*StepResult)
-		completedMutex := sync.Mutex{}
-		waiting := make(map[string][]string)
-
-		// Initialize waiting list
-		for id, node := range graph {
-			pending := []string{}
-			for _, dep := range node.DependsOn {
-				if _, ok := graph[dep]; ok {
-					pending = append(pending, dep)
+		failed, firstErr := e.runWaves(waveConfig{
+			graph: graph,
+			order: order,
+			exec: func(node *DAGNode) StepResult {
+				// 为迭代中的步骤生成唯一 ID
+				iterStep := node.Step
+				if iterStep.ID == "" {
+					iterStep.ID = fmt.Sprintf("step-%s-%d", strings.ToLower(strings.ReplaceAll(iterStep.Name, " ", "-")), i)
 				}
-			}
-			if len(pending) > 0 {
-				waiting[id] = pending
-			}
-		}
-
-		// Find entry nodes
-		ready := []string{}
-		for _, id := range order {
-			if len(waiting[id]) == 0 {
-				ready = append(ready, id)
-			}
-		}
-
-		hasError := false
-		firstErr := ""
-
-		for len(ready) > 0 && !hasError {
-			var wg sync.WaitGroup
-			waveResults := make(map[string]*StepResult)
-			resultsMutex := sync.Mutex{}
-
-			for _, id := range ready {
-				wg.Add(1)
-				go func(nodeID string) {
-					defer wg.Done()
-
-					node := graph[nodeID]
-					var stepResult StepResult
-
-					// 为迭代中的步骤生成唯一 ID
-					iterStep := node.Step
-					if iterStep.ID == "" {
-						iterStep.ID = fmt.Sprintf("step-%s-%d", strings.ToLower(strings.ReplaceAll(iterStep.Name, " ", "-")), i)
-					}
-					// 递归处理嵌套容器
-					if iterStep.Action == "condition" || iterStep.Action == "parallel" ||
-						iterStep.Action == "foreach" || iterStep.Action == "loop" {
-						stepResult = e.executeContainerDAG(iterStep, depth+1, result, containerStepID)
-					} else {
-						stepResult = e.executeStep(iterStep, depth+1, result, containerStepID)
-					}
-
-					resultsMutex.Lock()
-					waveResults[nodeID] = &stepResult
-					resultsMutex.Unlock()
-				}(id)
-			}
-
-			wg.Wait()
-
-			// Process wave results
-			for _, id := range ready {
-				sr := waveResults[id]
-
-				// 添加到结果列表
+				// 递归处理嵌套容器
+				if isContainerAction(iterStep.Action) {
+					return e.executeContainerDAG(iterStep, depth+1, result, containerStepID)
+				}
+				return e.executeStep(iterStep, depth+1, result, containerStepID)
+			},
+			collect: func(id string, sr *StepResult) {
 				// child result tracked in container.Children only
-
-				// 只有当这个节点是在 Do 块定义中时才添加到 allChildren
-				// 检查这个节点是否在容器的 Do 块内
-				isInDoBlock := false
+				// 只有当这个节点是在容器的 Do 块定义中时才添加到 allChildren
 				for _, doStep := range container.Do {
 					if doStep.Name == sr.Name {
-						isInDoBlock = true
+						allChildren = append(allChildren, *sr)
 						break
 					}
 				}
-				if isInDoBlock {
-					allChildren = append(allChildren, *sr)
-				}
+			},
+			failError: func(sr *StepResult) string {
+				return fmt.Sprintf("iteration %d, step '%s' failed: %s", i, sr.Name, sr.Error)
+			},
+		})
 
-				completedMutex.Lock()
-				completed[id] = sr
-				completedMutex.Unlock()
-
-				if sr.Status == "failed" && !graph[id].Step.ContinueOnError {
-					hasError = true
-					if firstErr == "" {
-						firstErr = fmt.Sprintf("iteration %d, step '%s' failed: %s", i, sr.Name, sr.Error)
-					}
-				}
-			}
-
-			if hasError {
-				break
-			}
-
-			// Find next ready nodes
-			newReady := []string{}
-			for id, pending := range waiting {
-				newPending := []string{}
-				for _, dep := range pending {
-					if _, ok := completed[dep]; !ok {
-						newPending = append(newPending, dep)
-					}
-				}
-
-				if len(newPending) == 0 {
-					newReady = append(newReady, id)
-					delete(waiting, id)
-				} else {
-					waiting[id] = newPending
-				}
-			}
-
-			ready = newReady
-		}
-
-		if hasError {
+		if failed {
 			// 迭代失败:已收集的 children(含前序迭代成果和失败步骤本身)保留在结果中
 			return StepResult{
 				Name:     container.Name,
@@ -274,12 +184,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	}
 	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", depth, parentID, nil)
 
-	// 创建子工作流(用 Snapshot 拷贝,避免并发 Set 触发 map iteration panic)
-	childWf := &Workflow{
-		Name:      container.Name,
-		Variables: e.context.Snapshot(),
-	}
-
 	// 根据容器类型收集子节点
 	var children []Step
 	if container.Action == "condition" {
@@ -309,8 +213,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		return sr
 	}
 
-	childWf.Steps = children
-
 	// 子节点的 parentID 是当前容器的 step ID
 	// (parentID 参数显式传递,不再存 Executor 字段,避免并行容器竞争)
 
@@ -335,71 +237,20 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	}
 
 	// 执行子节点（支持嵌套容器）
-	completed := make(map[string]*StepResult)
-	completedMutex := sync.Mutex{}
-	waiting := make(map[string][]string)
-
-	// Initialize waiting list
-	for id, node := range graph {
-		pending := []string{}
-		for _, dep := range node.DependsOn {
-			if _, ok := graph[dep]; ok {
-				pending = append(pending, dep)
-			}
-		}
-		if len(pending) > 0 {
-			waiting[id] = pending
-		}
-	}
-
-	// Find entry nodes
-	ready := []string{}
-	for _, id := range order {
-		if len(waiting[id]) == 0 {
-			ready = append(ready, id)
-		}
-	}
-
-	hasError := false
-	firstErr := ""
 	containerChildren := make([]StepResult, 0)
 
-	for len(ready) > 0 && !hasError {
-		var wg sync.WaitGroup
-		waveResults := make(map[string]*StepResult)
-		resultsMutex := sync.Mutex{}
-
-		for _, id := range ready {
-			wg.Add(1)
-			go func(nodeID string) {
-				defer wg.Done()
-
-				node := graph[nodeID]
-				var stepResult StepResult
-
-				// 递归处理嵌套容器
-				if node.Step.Action == "condition" || node.Step.Action == "parallel" ||
-					node.Step.Action == "foreach" || node.Step.Action == "loop" {
-					stepResult = e.executeContainerDAG(node.Step, depth+1, result, containerStepID)
-				} else {
-					stepResult = e.executeStep(node.Step, depth+1, result, containerStepID)
-				}
-
-				resultsMutex.Lock()
-				waveResults[nodeID] = &stepResult
-				resultsMutex.Unlock()
-			}(id)
-		}
-
-		wg.Wait()
-
-		// Process wave results
-		for _, id := range ready {
-			sr := waveResults[id]
-
-			// 添加到结果列表
+	failed, firstErr := e.runWaves(waveConfig{
+		graph: graph,
+		order: order,
+		exec: func(node *DAGNode) StepResult {
+			// 递归处理嵌套容器
+			if isContainerAction(node.Step.Action) {
+				return e.executeContainerDAG(node.Step, depth+1, result, containerStepID)
+			}
+			return e.executeStep(node.Step, depth+1, result, containerStepID)
+		},
+		collect: func(id string, sr *StepResult) {
 			// child result tracked in container.Children only
-
 			// 只有当这个节点是在容器子步骤定义中时才添加到 containerChildren
 			// 检查这个节点是否在容器的 Steps/Then/Else 块内
 			isInContainerBlock := false
@@ -430,45 +281,13 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			if isInContainerBlock {
 				containerChildren = append(containerChildren, *sr)
 			}
+		},
+		failError: func(sr *StepResult) string {
+			return fmt.Sprintf("child step '%s' failed: %s", sr.Name, sr.Error)
+		},
+	})
 
-			completedMutex.Lock()
-			completed[id] = sr
-			completedMutex.Unlock()
-
-			if sr.Status == "failed" && !graph[id].Step.ContinueOnError {
-				hasError = true
-				if firstErr == "" {
-					firstErr = fmt.Sprintf("child step '%s' failed: %s", sr.Name, sr.Error)
-				}
-			}
-		}
-
-		if hasError {
-			break
-		}
-
-		// Find next ready nodes
-		newReady := []string{}
-		for id, pending := range waiting {
-			newPending := []string{}
-			for _, dep := range pending {
-				if _, ok := completed[dep]; !ok {
-					newPending = append(newPending, dep)
-				}
-			}
-
-			if len(newPending) == 0 {
-				newReady = append(newReady, id)
-				delete(waiting, id)
-			} else {
-				waiting[id] = newPending
-			}
-		}
-
-		ready = newReady
-	}
-
-	if hasError {
+	if failed {
 		containerResult := StepResult{
 			ID:       containerStepID,
 			Name:     container.Name,

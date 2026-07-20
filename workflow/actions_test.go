@@ -308,74 +308,47 @@ func TestActionCondition(t *testing.T) {
 	}
 }
 
-// TestExecCondition_BranchExecution covers execCondition directly: branch
-// step outputs are joined into the container output, the skipped branch gets
-// synthetic skipped results. (execCondition is only reachable when a
-// condition step is dispatched through executeStep — see report.)
-func TestExecCondition_BranchExecution(t *testing.T) {
-	tests := []struct {
-		name          string
-		vars          map[string]string
-		expression    string
-		wantCond      bool
-		wantOutput    string
-		wantExecCount int
-		wantSkipCount int
-	}{
-		{
-			name: "true runs then branch and skips else",
-			vars: map[string]string{"env": "prod"}, expression: "{{.env}} == prod",
-			wantCond: true, wantOutput: "[INFO] t1\n[INFO] t2",
-			wantExecCount: 2, wantSkipCount: 1,
-		},
-		{
-			name: "false runs else branch and skips then",
-			vars: map[string]string{"env": "dev"}, expression: "{{.env}} == prod",
-			wantCond: false, wantOutput: "[INFO] e1",
-			wantExecCount: 1, wantSkipCount: 2,
-		},
+// TestActionCondition_NestedSkippedBranch verifies the container path's
+// recursive skipped-result synthesis: when the non-executed branch contains
+// a nested condition, its synthesized skipped result carries skipped
+// Then/Else children as well (createSkippedStepResult recursion).
+func TestActionCondition_NestedSkippedBranch(t *testing.T) {
+	e := newQuietExecutor(nil)
+	wf := &Workflow{
+		Name: "condition-nested-skip",
+		Steps: []Step{{
+			Name: "check", Action: "condition", Expression: "true",
+			Then: []Step{{Name: "yes", Action: "log", Message: "hi"}},
+			Else: []Step{{
+				Name: "inner", Action: "condition", Expression: "false",
+				Then: []Step{{Name: "inner-then", Action: "log", Message: "x"}},
+				Else: []Step{{Name: "inner-else", Action: "log", Message: "y"}},
+			}},
+		}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			e := newQuietExecutor(tt.vars)
-			step := Step{
-				Name: "check", Action: "condition", Expression: tt.expression,
-				Then: []Step{
-					{Name: "t1", Action: "log", Message: "t1"},
-					{Name: "t2", Action: "log", Message: "t2"},
-				},
-				Else: []Step{
-					{Name: "e1", Action: "log", Message: "e1"},
-				},
-			}
-			wfResult := &WorkflowResult{Name: "cond-direct", Variables: map[string]string{}}
-			output, execChildren, skippedChildren, condResult, err := e.execCondition(step, 0, wfResult, "cond-1")
-			if err != nil {
-				t.Fatalf("execCondition: %v", err)
-			}
-			if condResult != tt.wantCond {
-				t.Errorf("condResult=%v, want %v", condResult, tt.wantCond)
-			}
-			if output != tt.wantOutput {
-				t.Errorf("output=%q, want %q", output, tt.wantOutput)
-			}
-			if len(execChildren) != tt.wantExecCount {
-				t.Fatalf("execChildren=%d, want %d", len(execChildren), tt.wantExecCount)
-			}
-			for _, c := range execChildren {
-				if c.Status != "success" {
-					t.Errorf("exec child %s status=%s, want success", c.Name, c.Status)
-				}
-			}
-			if len(skippedChildren) != tt.wantSkipCount {
-				t.Fatalf("skippedChildren=%d, want %d", len(skippedChildren), tt.wantSkipCount)
-			}
-			for _, c := range skippedChildren {
-				if c.Status != "skipped" {
-					t.Errorf("skipped child %s status=%s, want skipped", c.Name, c.Status)
-				}
-			}
-		})
+	result := e.Execute(wf)
+	if result.Status != "success" {
+		t.Fatalf("status=%s err=%s", result.Status, result.Error)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("steps=%d, want 1", len(result.Steps))
+	}
+	sr := result.Steps[0]
+	if len(sr.ThenChildren) != 1 || sr.ThenChildren[0].Status != "success" {
+		t.Fatalf("then children=%+v, want 1 executed", sr.ThenChildren)
+	}
+	if len(sr.ElseChildren) != 1 {
+		t.Fatalf("else children=%d, want 1 (nested condition)", len(sr.ElseChildren))
+	}
+	inner := sr.ElseChildren[0]
+	if inner.Name != "inner" || inner.Status != "skipped" {
+		t.Errorf("nested condition: name=%q status=%s, want skipped", inner.Name, inner.Status)
+	}
+	if len(inner.ThenChildren) != 1 || inner.ThenChildren[0].Status != "skipped" {
+		t.Errorf("nested then children=%+v, want 1 skipped", inner.ThenChildren)
+	}
+	if len(inner.ElseChildren) != 1 || inner.ElseChildren[0].Status != "skipped" {
+		t.Errorf("nested else children=%+v, want 1 skipped", inner.ElseChildren)
 	}
 }
 
@@ -562,71 +535,6 @@ func TestActionParallel_ExecuteRunsChildrenConcurrently(t *testing.T) {
 		if c.Status != "success" {
 			t.Errorf("child %s status=%s, want success", c.Name, c.Status)
 		}
-	}
-}
-
-// TestExecParallel_Summary covers execParallel directly: the summary output
-// line, per-child results, and error aggregation. (execParallel is only
-// reachable when a parallel step is dispatched through executeStep — see
-// report; the Execute path routes parallel through executeContainerDAG.)
-func TestExecParallel_Summary(t *testing.T) {
-	tests := []struct {
-		name        string
-		children    []Step
-		wantOutput  []string // substrings of the aggregated output
-		wantErr     string   // substring of the returned error
-		wantSuccess int
-	}{
-		{
-			name: "all children succeed",
-			children: []Step{
-				{Name: "m1", Action: "log", Message: "m1"},
-				{Name: "m2", Action: "log", Message: "m2"},
-			},
-			wantOutput:  []string{"并行完成: 2个任务, 2成功, 0失败"},
-			wantSuccess: 2,
-		},
-		{
-			name: "one child fails",
-			children: []Step{
-				{Name: "m1", Action: "log", Message: "m1"},
-				{Name: "bad", Action: "shell", Command: "exit 1"},
-			},
-			wantOutput:  []string{"1成功, 1失败"},
-			wantErr:     "parallel step 'bad' failed",
-			wantSuccess: 1,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			e := newQuietExecutor(nil)
-			step := Step{Name: "par", Action: "parallel", Steps: tt.children}
-			wfResult := &WorkflowResult{Name: "par-direct", Variables: map[string]string{}}
-			output, children, err := e.execParallel(step, 0, wfResult, "par-1")
-			if tt.wantErr == "" && err != nil {
-				t.Fatalf("execParallel: %v", err)
-			}
-			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
-				t.Fatalf("error=%v, want substring %q", err, tt.wantErr)
-			}
-			for _, want := range tt.wantOutput {
-				if !strings.Contains(output, want) {
-					t.Errorf("output=%q, want substring %q", output, want)
-				}
-			}
-			if len(children) != len(tt.children) {
-				t.Fatalf("children=%d, want %d", len(children), len(tt.children))
-			}
-			success := 0
-			for _, c := range children {
-				if c.Status == "success" {
-					success++
-				}
-			}
-			if success != tt.wantSuccess {
-				t.Errorf("successful children=%d, want %d", success, tt.wantSuccess)
-			}
-		})
 	}
 }
 

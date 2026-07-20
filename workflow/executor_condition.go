@@ -38,63 +38,6 @@ func createSkippedStepResult(s Step) StepResult {
 	return sr
 }
 
-func (e *Executor) execCondition(step Step, depth int, result *WorkflowResult, parentID string) (string, []StepResult, []StepResult, bool, error) {
-	expr, err := e.context.ResolveTemplate(step.Expression)
-	if err != nil {
-		return "", nil, nil, false, fmt.Errorf("resolve expression: %w", err)
-	}
-
-	// Simple expression evaluation
-	// Supports: variable comparisons, string contains, empty checks
-	// Syntax: "{{.var}} == value", "{{.var}} != value", "{{.var}} contains value"
-	// Also supports: "var1 == var2" (resolves both sides)
-	evalResult, err := e.evaluateExpression(expr)
-	if err != nil {
-		return "", nil, nil, false, fmt.Errorf("evaluate condition: %w", err)
-	}
-
-	// Print condition with pretty output
-	if e.richPrinter != nil {
-		e.richPrinter.PrintCondition(expr, evalResult)
-	} else if e.printer != nil {
-		e.printer.PrintCondition(expr, evalResult)
-	}
-
-	// Determine which branch to execute
-	var execSteps []Step
-	var skippedSteps []Step
-	if evalResult {
-		execSteps = step.Then
-		skippedSteps = step.Else
-	} else {
-		execSteps = step.Else
-		skippedSteps = step.Then
-	}
-
-	// Execute the selected branch
-	var outputs []string
-	var execChildren []StepResult
-	for _, s := range execSteps {
-		sr := e.executeStep(s, depth+1, result, parentID)
-		if sr.Output != "" {
-			outputs = append(outputs, sr.Output)
-		}
-		execChildren = append(execChildren, sr)
-		if sr.Status == "failed" && !s.ContinueOnError {
-			return strings.Join(outputs, "\n"), execChildren, nil, evalResult, fmt.Errorf("sub-step '%s' failed: %s", s.Name, sr.Error)
-		}
-	}
-
-	// Create skipped branch results (pending status, not executed)
-	// 使用递归函数处理嵌套 condition
-	var skippedChildren []StepResult
-	for _, s := range skippedSteps {
-		skippedChildren = append(skippedChildren, createSkippedStepResult(s))
-	}
-
-	return strings.Join(outputs, "\n"), execChildren, skippedChildren, evalResult, nil
-}
-
 func (e *Executor) evaluateExpression(expr string) (bool, error) {
 	expression := strings.TrimSpace(expr)
 
