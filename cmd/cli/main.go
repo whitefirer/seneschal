@@ -152,9 +152,10 @@ func printUsage() {
 	fmt.Println()
 }
 
-func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun bool, outputMode string, themeName string, forceColor bool, tuiStyle string, remaining []string) {
+func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun bool, outputMode string, themeName string, forceColor bool, tuiStyle string, dir string, remaining []string) {
 	outputMode = "rich"
 	themeName = "default"
+	dir = executionsDir()
 	vars = make(map[string]string)
 	remaining = make([]string, 0)
 	for i := 0; i < len(args); i++ {
@@ -188,6 +189,14 @@ func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun boo
 				tuiStyle = args[i+1]
 				i++
 			}
+		case "--dir", "-d":
+			// Executions directory for run records (same semantics as
+			// history/replay --dir; note: chat --dir means workflows dir —
+			// the naming collision is tracked for the cobra migration).
+			if i+1 < len(args) {
+				dir = args[i+1]
+				i++
+			}
 		default:
 			remaining = append(remaining, args[i])
 		}
@@ -196,10 +205,10 @@ func parseFlags(args []string) (vars map[string]string, verbose bool, dryRun boo
 }
 
 func cmdRun(args []string) {
-	vars, verbose, dryRun, outputModeStr, themeName, forceColor, tuiStyle, remaining := parseFlags(args)
+	vars, verbose, dryRun, outputModeStr, themeName, forceColor, tuiStyle, dir, remaining := parseFlags(args)
 	if len(remaining) == 0 {
 		fmt.Println("Error: please specify a workflow YAML file")
-		fmt.Println("Usage: seneschal run <file.yaml> [--var key=value ...] [--verbose] [--dry-run]")
+		fmt.Println("Usage: seneschal run <file.yaml> [--var key=value ...] [--verbose] [--dry-run] [--dir DIR]")
 		os.Exit(1)
 	}
 
@@ -244,7 +253,7 @@ func cmdRun(args []string) {
 	if !dryRun {
 		execID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHexCLI(4))
 		if raw, rerr := os.ReadFile(args[0]); rerr == nil {
-			store := workflow.NewFileStore(executionsDir())
+			store := workflow.NewFileStore(dir)
 			dur := ""
 			if start, e := parseRFC3339(result.StartTime); e == nil {
 				if end, e := parseRFC3339(result.EndTime); e == nil {
@@ -275,7 +284,7 @@ func cmdRun(args []string) {
 }
 
 func cmdCreate(args []string) {
-	_, _, _, _, _, _, _, remaining := parseFlags(args)
+	_, _, _, _, _, _, _, _, remaining := parseFlags(args)
 
 	if len(remaining) == 0 {
 		fmt.Println("Error: please specify a workflow name")

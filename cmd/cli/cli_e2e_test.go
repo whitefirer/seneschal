@@ -322,3 +322,36 @@ func TestCLI_Template(t *testing.T) {
 		t.Errorf("expected template YAML output")
 	}
 }
+
+// TestCLI_RunDirFlag covers run --dir: execution records land in the given
+// directory (not ./executions) and history --dir can see them there.
+func TestCLI_RunDirFlag(t *testing.T) {
+	tmp := t.TempDir()
+	wfPath := filepath.Join(tmp, "basic.yaml")
+	if err := os.WriteFile(wfPath, []byte("name: dir-demo\nsteps:\n  - name: hi\n    action: log\n    message: hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	execDir := filepath.Join(tmp, "custom-execs")
+
+	_, stderr, code := runCLIInDir(t, tmp, "run", wfPath, "-m", "plain", "--dir", execDir)
+	if code != 0 {
+		t.Fatalf("run --dir exit=%d stderr=%s", code, stderr)
+	}
+
+	// Record must be in execDir, not in ./executions.
+	entries, err := os.ReadDir(execDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no execution files in --dir %s: %v", execDir, err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "executions")); !os.IsNotExist(err) {
+		t.Fatalf("default ./executions should not have been created")
+	}
+
+	stdout, _, code := runCLIInDir(t, tmp, "history", "list", "--dir", execDir)
+	if code != 0 {
+		t.Fatalf("history list --dir exit=%d", code)
+	}
+	if !strings.Contains(stdout, "dir-demo") {
+		t.Fatalf("history list --dir output missing workflow: %s", stdout)
+	}
+}
