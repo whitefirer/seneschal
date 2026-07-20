@@ -75,7 +75,7 @@ executeDAG (executor.go:467)
    遇到容器节点(condition/parallel/foreach)→ executeContainerDAG 递归
         │
         ▼
-   executeStep (executor.go:677) dispatch → execShell / execHTTP / execCondition / ...
+   executeStep (executor.go:677) dispatch → execShell / execHTTP / execAI / ... (容器节点不走这里)
         │
         ▼
    StepResult → 汇总 → WorkflowResult
@@ -85,7 +85,7 @@ executeDAG (executor.go:467)
 
 `condition` / `parallel` / `foreach` 是容器节点。`executeContainerDAG`(`executor_foreach.go:262`)对容器内子步骤再建一个子 DAG 并按 wave 调度。
 
-> ⚠️ 已知技术债:`executeDAG`、`executeForeach` 单轮、`executeContainerDAG` 三处 wave 调度逻辑高度重复(~300 行)。计划抽 `runWave(nodes, deps, execFn)` 复用(见 ROADMAP)。
+> ✅ 已统一:三处 wave 调度(`executeDAG`/`executeContainerDAG`/`executeForeach`)已抽出共享的 `runWaves(waveConfig)`(executor.go:754),行为差异(取消检查、join_mode、skipped 合成、事件 parent、失败文案)以选项参数表达。
 
 ## 内核数据结构
 
@@ -151,7 +151,7 @@ type WorkflowResult struct {
 | `set`/`sleep`/`log`/`template` | `executor_actions.go` | 简单 |
 | `ai`/`ai_decide` | _(Phase 2)_ | 见下文"AI 集成架构" |
 
-> ⚠️ `condition` 有两条执行路径:`execCondition`(顶层)和 `executeContainerDAG` 内联求值,逻辑重复,计划统一(ROADMAP)。
+> ✅ 已统一:`condition` 旧的顶层直发路径 `execCondition` 已随 executeStep 容器 dispatch 分支一并删除(2023 年初版 executor 的残留),现仅 `executeContainerDAG` 一条路径。
 
 ## 输出体系
 
