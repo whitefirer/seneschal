@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,82 +81,11 @@ func (p *AnthropicProvider) retryBaseDelay() time.Duration {
 	return 1 * time.Second
 }
 
-// isRetryableStatus reports whether an HTTP status code indicates a transient
-// error worth retrying (rate limit, server error). 4xx (except 429) are not
-// retryable — they indicate a request-level problem (auth, bad input).
-func isRetryableStatus(code int) bool {
-	switch code {
-	case 429, 500, 502, 503, 504:
-		return true
-	}
-	return false
-}
-
-// isRetryableNetErr reports whether a network-level error is transient
-// (timeout, connection reset). Non-timeout errors (e.g. DNS failure) are also
-// retried — the model API is generally reachable, and a blip shouldn't fail
-// the whole workflow.
-func isRetryableNetErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	// Context cancellation is NOT retryable — the caller deliberately cancelled.
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	return true // network errors are generally worth one retry
-}
-
 // retryableHTTPDo wraps httpClient.Do with automatic retries on transient
 // errors (429/5xx/timeout). Returns the final response (which the caller must
 // close) and the total number of retries performed.
 func (p *AnthropicProvider) retryableHTTPDo(ctx context.Context, req *http.Request) (*http.Response, int, error) {
-	maxR := p.maxRetries()
-	baseDelay := p.retryBaseDelay()
-
-	for attempt := 0; ; attempt++ {
-		resp, err := p.httpClient().Do(req)
-
-		if err != nil {
-			// Network error — retry if transient and we haven't exhausted.
-			if isRetryableNetErr(err) && attempt < maxR {
-				delay := backoffDelay(baseDelay, attempt)
-				select {
-				case <-time.After(delay):
-				case <-ctx.Done():
-					return nil, attempt, ctx.Err()
-				}
-				continue
-			}
-			return nil, attempt, err
-		}
-
-		// Got an HTTP response. If retryable status and retries left, close
-		// the body and retry. Otherwise return the response as-is (the caller
-		// reads the body, including error details for non-2xx).
-		if isRetryableStatus(resp.StatusCode) && attempt < maxR {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			delay := backoffDelay(baseDelay, attempt)
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return nil, attempt, ctx.Err()
-			}
-			continue
-		}
-
-		// Non-retryable or out of retries: return what we have.
-		return resp, attempt, nil
-	}
-}
-
-func backoffDelay(base time.Duration, attempt int) time.Duration {
-	d := base * (1 << attempt)
-	if d > 30*time.Second {
-		return 30 * time.Second
-	}
-	return d
+	return retryableHTTPDo(ctx, p.httpClient(), p.maxRetries(), p.retryBaseDelay(), req)
 }
 
 // anthropicRequest is the request body for POST /v1/messages.

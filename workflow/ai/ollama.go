@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // OllamaProvider implements Provider against a local Ollama server
@@ -27,6 +28,15 @@ type OllamaProvider struct {
 
 	// HTTPClient used for requests. If nil, http.DefaultClient.
 	HTTPClient *http.Client
+
+	// MaxRetries is the maximum number of automatic retries on transient
+	// errors (429/5xx/timeout). 0 or negative (the default) disables retries,
+	// preserving the pre-retry behavior.
+	MaxRetries int
+
+	// RetryBaseDelay is the initial backoff delay; doubled each retry
+	// (capped at 30s). 0 = 1s default.
+	RetryBaseDelay time.Duration
 }
 
 func (p *OllamaProvider) Name() string { return "ollama" }
@@ -45,6 +55,20 @@ func (p *OllamaProvider) httpClient() *http.Client {
 		return p.HTTPClient
 	}
 	return http.DefaultClient
+}
+
+func (p *OllamaProvider) maxRetries() int {
+	if p.MaxRetries > 0 {
+		return p.MaxRetries
+	}
+	return 0 // retries are opt-in for Ollama (unlike Anthropic's default 3)
+}
+
+func (p *OllamaProvider) retryBaseDelay() time.Duration {
+	if p.RetryBaseDelay > 0 {
+		return p.RetryBaseDelay
+	}
+	return 1 * time.Second
 }
 
 // ollamaChatRequest is the body for POST /api/chat.
@@ -117,7 +141,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, req Request) (Response, e
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.httpClient().Do(httpReq)
+	resp, retries, err := retryableHTTPDo(ctx, p.httpClient(), p.maxRetries(), p.retryBaseDelay(), httpReq)
 	if err != nil {
 		return Response{}, fmt.Errorf("ollama request: %w", err)
 	}
@@ -147,6 +171,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, req Request) (Response, e
 		StopReason:   stopReason,
 		InputTokens:  oresp.PromptEvalCount,
 		OutputTokens: oresp.EvalCount,
+		Retries:      retries,
 	}, nil
 }
 
@@ -182,7 +207,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request, onToken func(s
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.httpClient().Do(httpReq)
+	resp, retries, err := retryableHTTPDo(ctx, p.httpClient(), p.maxRetries(), p.retryBaseDelay(), httpReq)
 	if err != nil {
 		return Response{}, fmt.Errorf("ollama request: %w", err)
 	}
@@ -197,7 +222,7 @@ func (p *OllamaProvider) Stream(ctx context.Context, req Request, onToken func(s
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var sb strings.Builder
-	out := Response{StopReason: "end_turn"}
+	out := Response{StopReason: "end_turn", Retries: retries}
 
 	for scanner.Scan() {
 		line := scanner.Text()
