@@ -910,10 +910,19 @@ func historyShow(args []string) {
 	if snap.Nondeterministic {
 		fmt.Printf("Nondeterm:   true (contains AI steps)\n")
 	}
-	if len(snap.Variables) > 0 {
+	// Mask sensitive variables for display only. The snapshot stores real
+	// values on purpose — replay re-injects them — so masking happens here at
+	// presentation time, using the sensitive: declarations from the workflow
+	// YAML embedded in the snapshot. Step outputs need no extra masking: the
+	// engine already replaced sensitive values with ****** at finalize time.
+	displayVars := snap.Variables
+	if patterns := sensitivePatternsFromYAML(snap.Workflow); len(patterns) > 0 {
+		displayVars = workflow.MaskVariables(snap.Variables, patterns)
+	}
+	if len(displayVars) > 0 {
 		fmt.Println("Variables:")
-		for _, k := range sortedKeys(snap.Variables) {
-			fmt.Printf("  %s = %s\n", k, snap.Variables[k])
+		for _, k := range sortedKeys(displayVars) {
+			fmt.Printf("  %s = %s\n", k, displayVars[k])
 		}
 	}
 	if len(snap.Steps) > 0 {
@@ -931,6 +940,22 @@ func historyShow(args []string) {
 			}
 		}
 	}
+}
+
+// sensitivePatternsFromYAML extracts the workflow's sensitive variable
+// patterns from the YAML stored in a snapshot. Fail-open: it returns nil when
+// the YAML is missing or unparseable, in which case variables print as-is —
+// matching the engine's behavior for workflows without a sensitive:
+// declaration. (Same approach as api/mask.go's sensitivePatternsFromYAML.)
+func sensitivePatternsFromYAML(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	wf, err := workflow.Parse([]byte(raw))
+	if err != nil {
+		return nil
+	}
+	return wf.Sensitive
 }
 
 func historyPurge(args []string) {

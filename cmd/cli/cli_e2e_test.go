@@ -30,12 +30,19 @@ func TestMain(m *testing.M) {
 // runCLI executes the compiled binary with given args, returns stdout, stderr, exit code.
 func runCLI(t *testing.T, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
+	// Use testdata as the working directory for relative paths.
+	return runCLIInDir(t, projectRoot(), args...)
+}
+
+// runCLIInDir is runCLI with an explicit working directory — used by tests
+// that want ./executions (the default history dir) to land in a temp dir.
+func runCLIInDir(t *testing.T, dir string, args ...string) (stdout, stderr string, exitCode int) {
+	t.Helper()
 	cmd := exec.Command(binaryPath, args...)
 	var outBuf, errBuf strings.Builder
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	// Use testdata as the working directory for relative paths.
-	cmd.Dir = projectRoot()
+	cmd.Dir = dir
 	err := cmd.Run()
 	exitCode = 0
 	if err != nil {
@@ -218,6 +225,89 @@ func TestCLI_HistoryList(t *testing.T) {
 	// Should have at least one execution.
 	if strings.Contains(stdout, "no execution history") {
 		t.Errorf("expected at least one execution in history")
+	}
+}
+
+func TestCLI_HistoryShowMasksSensitiveVars(t *testing.T) {
+	tmp := t.TempDir()
+	secrets := []string{"s3cr3t-token-abcdef12345", "p@ssw0rd-db-98765"}
+	wfPath := filepath.Join(tmp, "sensitive-demo.yaml")
+	wfYAML := `name: sensitive-demo
+variables:
+  api_token: s3cr3t-token-abcdef12345
+  db_secret: p@ssw0rd-db-98765
+  plain_var: hello-world
+sensitive:
+  - api_token
+  - "*_secret"
+steps:
+  - name: leak
+    action: shell
+    command: echo "token={{.api_token}} secret={{.db_secret}} plain={{.plain_var}}"
+`
+	if err := os.WriteFile(wfPath, []byte(wfYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run with cwd=tmp so ./executions (the default history dir) lands in tmp.
+	_, stderr, code := runCLIInDir(t, tmp, "run", wfPath, "-m", "plain")
+	if code != 0 {
+		t.Fatalf("run exit=%d stderr=%s", code, stderr)
+	}
+	execID := ""
+	for _, line := range strings.Split(stderr, "\n") {
+		if idx := strings.Index(line, "Execution ID:"); idx >= 0 {
+			execID = strings.TrimSpace(line[idx+len("Execution ID:"):])
+		}
+	}
+	if execID == "" {
+		t.Fatalf("no execution ID in stderr: %s", stderr)
+	}
+
+	stdout, _, code := runCLIInDir(t, tmp, "history", "show", execID)
+	if code != 0 {
+		t.Fatalf("history show exit=%d", code)
+	}
+	// No real secret anywhere in the output.
+	for _, secret := range secrets {
+		if strings.Contains(stdout, secret) {
+			t.Errorf("history show leaked secret %q:\n%s", secret, stdout)
+		}
+	}
+	// Sensitive vars are masked (exact pattern + glob pattern); the
+	// non-sensitive var is untouched.
+	for _, want := range []string{"api_token = ***", "db_secret = ***", "plain_var = hello-world"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("history show missing %q:\n%s", want, stdout)
+		}
+	}
+	// Step output arrives already masked by the engine at finalize time
+	// (******) — the CLI must display it as-is, not mask again.
+	if !strings.Contains(stdout, "******") {
+		t.Errorf("expected engine-masked ****** in step output:\n%s", stdout)
+	}
+
+	// history list shows only summaries — no variable values can leak.
+	listOut, _, code := runCLIInDir(t, tmp, "history", "list")
+	if code != 0 {
+		t.Fatalf("history list exit=%d", code)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(listOut, secret) {
+			t.Errorf("history list leaked secret %q:\n%s", secret, listOut)
+		}
+	}
+
+	// The on-disk snapshot must keep the REAL values — replay re-injects
+	// them. Masking is display-only and must not touch the store.
+	raw, err := os.ReadFile(filepath.Join(tmp, "executions", execID+".json"))
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	for _, secret := range secrets {
+		if !strings.Contains(string(raw), secret) {
+			t.Errorf("snapshot lost real value %q — replay chain broken", secret)
+		}
 	}
 }
 
