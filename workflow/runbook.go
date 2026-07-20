@@ -51,6 +51,27 @@ type TriggerFunc func(rb *RunbookConfig, extraVars map[string]string) (execID st
 // branch on it with errors.Is.
 var ErrTriggerDispatch = errors.New("trigger dispatch failed")
 
+// TriggerSourceExtraVar is the reserved extraVars key the manager uses to
+// tell the trigger callback where a fire came from — the values are the
+// TriggerType strings ("manual", "webhook", "cron"). The TriggerFunc
+// signature has no source channel of its own, so the manager passes it
+// through extraVars; callbacks must treat the key as metadata and strip it
+// before merging extraVars into the workflow's variables (MakeTriggerCallback
+// does). A user-supplied variable of the same name would be overridden by
+// the manager, hence the deliberately awkward name.
+const TriggerSourceExtraVar = "_seneschal_trigger_source"
+
+// withTriggerSource returns a copy of extraVars carrying the trigger source.
+// The copy keeps the caller's map (e.g. an HTTP request body) untouched.
+func withTriggerSource(extraVars map[string]string, source TriggerType) map[string]string {
+	vars := make(map[string]string, len(extraVars)+1)
+	for k, v := range extraVars {
+		vars[k] = v
+	}
+	vars[TriggerSourceExtraVar] = string(source)
+	return vars
+}
+
 // RunbookManager loads, watches, and dispatches runbooks.
 type RunbookManager struct {
 	mu           sync.RWMutex
@@ -203,7 +224,7 @@ func (m *RunbookManager) Trigger(name string, extraVars map[string]string) (stri
 	if m.trigger == nil {
 		return "", nil
 	}
-	execID, err := m.trigger(rb, extraVars)
+	execID, err := m.trigger(rb, withTriggerSource(extraVars, TriggerManual))
 	if err != nil {
 		return "", fmt.Errorf("runbook %q: %w: %v", name, ErrTriggerDispatch, err)
 	}
@@ -222,7 +243,7 @@ func (m *RunbookManager) TriggerByPath(path string, extraVars map[string]string)
 				if m.trigger == nil {
 					return "", nil
 				}
-				execID, err := m.trigger(rb, extraVars)
+				execID, err := m.trigger(rb, withTriggerSource(extraVars, TriggerWebhook))
 				if err != nil {
 					return "", fmt.Errorf("runbook %q: %w: %v", rb.Name, ErrTriggerDispatch, err)
 				}
@@ -263,7 +284,7 @@ func (m *RunbookManager) runCron(key string, rb *RunbookConfig, interval time.Du
 		select {
 		case <-ticker.C:
 			if m.trigger != nil {
-				execID, err := m.trigger(rb, nil)
+				execID, err := m.trigger(rb, withTriggerSource(nil, TriggerCron))
 				if err != nil {
 					// A failing trigger used to vanish into stdout; surface it
 					// through logFunc so the scheduler has visibility.

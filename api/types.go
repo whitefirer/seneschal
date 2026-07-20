@@ -110,4 +110,9 @@ type WSProgressEvent struct {
 	LogLevel   string `json:"logLevel,omitempty"`
 	// Condition 特有字段
 	ConditionResult *bool `json:"conditionResult,omitempty"` // 条件求值结果
+	// runbook_trigger 事件字段（仅 Type == "runbook_trigger" 时设置）：
+	// RunbookName 是被触发的 runbook 名，Source 是触发来源
+	// (manual/webhook/cron)。
+	RunbookName string `json:"runbookName,omitempty"`
+	Source      string `json:"source,omitempty"`
 }

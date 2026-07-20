@@ -194,28 +194,72 @@ func RegisterRunbookRoutes(r *mux.Router, h *RunbookHandler) {
 // scheduler logs it); the run itself stays async and its snapshot is
 // persisted on completion.
 //
-// The hub and aiCfg parameters are reserved for the upcoming WS broadcast of
-// runbook trigger events (and AI-assisted trigger handling). They are
-// intentionally unused today — kept so the integration seam stays stable;
-// do not remove them.
+// The hub carries "runbook_trigger" WS events: one when a trigger is
+// dispatched (Status "triggered", with the new execution ID) and one when
+// dispatch fails (Status "failed", with the error) — the latter is what makes
+// a cron-fired runbook with a broken workflow reference visible in the UI
+// instead of only in server logs. The trigger source (manual/webhook/cron)
+// arrives via the reserved workflow.TriggerSourceExtraVar extraVars key,
+// which is stripped before variables are merged so it never leaks into the
+// execution environment. A nil hub disables broadcasting.
+//
+// aiCfg is still reserved (AI-assisted trigger handling) and intentionally
+// unused — kept so the integration seam stays stable; do not remove it.
 func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir string, aiCfg workflow.AIConfig) workflow.TriggerFunc {
 	return func(rb *workflow.RunbookConfig, extraVars map[string]string) (string, error) {
+		// Trigger source metadata, defaulting to manual for direct callback
+		// invocations that bypass the manager.
+		source := extraVars[workflow.TriggerSourceExtraVar]
+		if source == "" {
+			source = string(workflow.TriggerManual)
+		}
+		broadcast := func(execID, wfName, status, errMsg string) {
+			if hub == nil {
+				return
+			}
+			ev := WSProgressEvent{
+				Type:         "runbook_trigger",
+				RunbookName:  rb.Name,
+				Source:       source,
+				ExecutionID:  execID,
+				WorkflowName: wfName,
+				WorkflowFile: rb.Workflow,
+				Status:       status,
+				Error:        errMsg,
+				Timestamp:    workflow.Now(),
+			}
+			if status == "triggered" {
+				ev.LogLevel = "INFO"
+				ev.LogMessage = fmt.Sprintf("📋 runbook %s triggered (%s) → execution %s", rb.Name, source, execID)
+			} else {
+				ev.LogLevel = "ERROR"
+				ev.LogMessage = fmt.Sprintf("⚠️ runbook %s trigger failed (%s): %s", rb.Name, source, errMsg)
+			}
+			hub.Broadcast(ev)
+		}
+
 		// Resolve workflow path.
 		wfPath, err := resolveWorkflowPath(rb, workflowsDir)
 		if err != nil {
+			broadcast("", "", "failed", err.Error())
 			return "", fmt.Errorf("runbook %s: %w", rb.Name, err)
 		}
 		wf, err := workflow.ParseFile(wfPath)
 		if err != nil {
+			broadcast("", "", "failed", err.Error())
 			return "", fmt.Errorf("runbook %s: parse workflow: %w", rb.Name, err)
 		}
 
-		// Merge variables: runbook defaults + trigger extra vars.
+		// Merge variables: runbook defaults + trigger extra vars. The
+		// reserved source key is metadata, not a workflow variable.
 		vars := make(map[string]string)
 		for k, v := range rb.Variables {
 			vars[k] = v
 		}
 		for k, v := range extraVars {
+			if k == workflow.TriggerSourceExtraVar {
+				continue
+			}
 			vars[k] = v
 		}
 
@@ -247,6 +291,8 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 				})
 			}
 		}()
+
+		broadcast(execID, wf.Name, "triggered", "")
 		return execID, nil
 	}
 }
