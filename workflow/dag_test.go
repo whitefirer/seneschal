@@ -440,3 +440,84 @@ func TestExecuteDAG_SkippedOrderDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestTopologicalSort_DeterministicOrder pins declaration-order determinism:
+// with multiple entry nodes, the topological order must follow YAML
+// declaration order across runs (map iteration order is random), while
+// dependencies still take precedence.
+func TestTopologicalSort_DeterministicOrder(t *testing.T) {
+	e := newQuietExecutor(nil)
+	steps := []Step{
+		{Name: "zeta", Action: "log"},
+		{Name: "alpha", Action: "log"},
+		{Name: "mike", Action: "log", DependsOn: []string{"zeta"}},
+		{Name: "beta", Action: "log"},
+		{Name: "gamma", Action: "log", DependsOn: []string{"beta"}},
+	}
+	want := []string{"zeta", "alpha", "beta", "mike", "gamma"}
+
+	for i := 0; i < 50; i++ {
+		graph, err := e.buildDAGGraph(steps)
+		if err != nil {
+			t.Fatalf("buildDAGGraph: %v", err)
+		}
+		order, err := e.topologicalSort(graph)
+		if err != nil {
+			t.Fatalf("topologicalSort: %v", err)
+		}
+		if !reflect.DeepEqual(order, want) {
+			t.Fatalf("run %d: order=%v, want %v", i, order, want)
+		}
+	}
+}
+
+// TestExecuteDAG_ParallelEntriesStillConcurrent guards the other half of the
+// contract: deterministic ordering must not serialize execution — entry
+// nodes in the same wave still run concurrently.
+func TestExecuteDAG_ParallelEntriesStillConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	e := newQuietExecutor(nil)
+	var mu sync.Mutex
+	inFlight := 0
+	maxInFlight := 0
+	e.OnProgress = func(ev ProgressEvent) {
+		if ev.Type != "step_start" && ev.Type != "step_complete" {
+			return
+		}
+		mu.Lock()
+		if ev.Type == "step_start" {
+			inFlight++
+			if inFlight > maxInFlight {
+				maxInFlight = inFlight
+			}
+		} else {
+			inFlight--
+		}
+		mu.Unlock()
+	}
+
+	wf := &Workflow{
+		Name: "parallel-entries",
+		Steps: []Step{
+			{Name: "a", Action: "shell", Command: rendezvousScript(dir, "a", "b") + " && " + rendezvousScript(dir, "a", "c")},
+			{Name: "b", Action: "shell", Command: rendezvousScript(dir, "b", "a") + " && " + rendezvousScript(dir, "b", "c")},
+			{Name: "c", Action: "shell", Command: rendezvousScript(dir, "c", "a") + " && " + rendezvousScript(dir, "c", "b")},
+			{Name: "tail", Action: "log", Message: "done", DependsOn: []string{"a", "b", "c"}},
+		},
+	}
+	r := runDAG(e, wf)
+	if r.Status != "success" {
+		t.Fatalf("status=%s, err=%v", r.Status, r.Error)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxInFlight < 3 {
+		t.Fatalf("maxInFlight=%d, want 3 concurrent entry nodes", maxInFlight)
+	}
+	// Result collection follows declaration order now.
+	got := stepNames(r.Steps)
+	want := []string{"a", "b", "c", "tail"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("steps order=%v, want %v", got, want)
+	}
+}

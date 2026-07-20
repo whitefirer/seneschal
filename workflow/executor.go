@@ -590,6 +590,7 @@ type DAGNode struct {
 	DependsOn []string
 	Next      []string
 	JoinMode  string // "all" (全部完成) 或 "any" (任意完成)
+	Order     int    // 在 YAML 中的声明顺序，用于确定性拓扑排序
 }
 
 // buildDAGGraph builds a DAG graph from workflow steps
@@ -601,7 +602,7 @@ func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
 	nameToId := make(map[string]string)
 
 	// First pass: create all nodes (只处理顶层步骤，不递归处理容器子节点)
-	for _, step := range steps {
+	for i, step := range steps {
 		id := step.ID
 		if id == "" {
 			id = step.Name // 直接使用 name 作为 ID
@@ -615,6 +616,7 @@ func (e *Executor) buildDAGGraph(steps []Step) (map[string]*DAGNode, error) {
 			DependsOn: step.DependsOn,
 			Next:      step.Next,
 			JoinMode:  step.JoinMode,
+			Order:     i,
 		}
 	}
 
@@ -701,13 +703,25 @@ func (e *Executor) topologicalSort(graph map[string]*DAGNode) ([]string, error) 
 		}
 	}
 
-	// Find all nodes with in-degree 0 (entry nodes)
+	// Sort dependents by declaration order so Kahn's traversal is
+	// deterministic — map iteration order is random across runs, and the
+	// resulting order feeds wave scheduling, result collection, and logs.
+	for id := range dependents {
+		sort.SliceStable(dependents[id], func(a, b int) bool {
+			return graph[dependents[id][a]].Order < graph[dependents[id][b]].Order
+		})
+	}
+
+	// Find all nodes with in-degree 0 (entry nodes), in declaration order.
 	queue := []string{}
 	for id, degree := range inDegree {
 		if degree == 0 {
 			queue = append(queue, id)
 		}
 	}
+	sort.SliceStable(queue, func(a, b int) bool {
+		return graph[queue[a]].Order < graph[queue[b]].Order
+	})
 
 	// Process queue
 	result := []string{}
