@@ -244,7 +244,7 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 ### 交付
 - [x] 变量级敏感标记(workflow 级 `sensitive:` 列表,glob 模式;step env 未做)
 - [x] 引擎层不脱敏(执行/落盘/replay 回灌用真实值),展示层脱敏
-- [x] 脱敏位置(部分):HTML 报告/导出 ✅、执行详情 API(变量表 + 内存 Logs 清洗)✅、ask 视图 ✅;chat 确认卡片、history show、前端执行详情页未做
+- [x] 脱敏位置(部分):HTML 报告/导出 ✅、执行详情 API(变量表 + 内存 Logs 清洗)✅、ask 视图 ✅、chat 确认卡片(sensitiveKeys + 前端显示层)✅、history show ✅;前端执行详情页变量表未做(页面本就不展示变量)
 - [x] 脱敏值显示为 `***`(变量) / `******`(输出文本清洗)(长度可配未做)
 - [ ] 权限分层:`admin`(看明文) vs `executor`(看脱敏)——为未来多用户铺路
 

@@ -821,6 +821,7 @@ func TestActionForeach_StepOutputEventSymmetry(t *testing.T) {
 		step         Step
 		wantOutputs  int      // number of step_output events for the container
 		wantContains []string // substrings of the event payload
+		wantExact    string   // exact payload ("" = skip); pins trailing-newline trimming
 	}{
 		{
 			name: "success with child output emits step_output",
@@ -830,6 +831,9 @@ func TestActionForeach_StepOutputEventSymmetry(t *testing.T) {
 			},
 			wantOutputs:  1,
 			wantContains: []string{"out-alpha", "out-beta"},
+			// echo adds a trailing newline per child; aggregation must trim so
+			// the joined output has no blank lines or dangling newline.
+			wantExact: "out-alpha\nout-beta",
 		},
 		{
 			name: "empty items emits no step_output",
@@ -873,6 +877,9 @@ func TestActionForeach_StepOutputEventSymmetry(t *testing.T) {
 				if !strings.Contains(outputs[0].Output, want) {
 					t.Errorf("step_output payload=%q, want substring %q", outputs[0].Output, want)
 				}
+			}
+			if tt.wantExact != "" && outputs[0].Output != tt.wantExact {
+				t.Errorf("step_output payload=%q, want exact %q", outputs[0].Output, tt.wantExact)
 			}
 		})
 	}

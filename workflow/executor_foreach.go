@@ -123,8 +123,8 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 	// 完成前会发 step_output 事件(见 executeContainerDAG 的 foreach 分支)。
 	outputs := make([]string, 0, len(allChildren))
 	for _, child := range allChildren {
-		if child.Output != "" {
-			outputs = append(outputs, child.Output)
+		if out := strings.TrimRight(child.Output, "\n"); out != "" {
+			outputs = append(outputs, out)
 		}
 	}
 
