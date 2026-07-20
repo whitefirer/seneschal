@@ -779,10 +779,13 @@ type waveConfig struct {
 	// (each call site has its own wording).
 	failError func(sr *StepResult) string
 	// checkCancel makes runWaves stop scheduling new waves once the run is
-	// canceled (top-level DAG only).
+	// canceled. All three call sites set it, so a TUI quit (or any other
+	// abort) stops container and foreach wave scheduling within one wave
+	// too, not just the top-level DAG.
 	checkCancel bool
-	// joinAny enables join_mode: any (top-level DAG only; container and
-	// foreach sub-DAGs historically only support join_mode: all).
+	// joinAny enables join_mode: any. All three call sites set it, so a
+	// sub-DAG inside a container/foreach honors join_mode: any exactly like
+	// the top-level DAG (previously containers silently treated it as all).
 	joinAny bool
 	// markSkipped, if set, is called for every still-waiting node when the
 	// schedule ends in failure (top-level DAG synthesizes skipped results).

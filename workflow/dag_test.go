@@ -322,6 +322,148 @@ func TestExecuteDAG_JoinMode(t *testing.T) {
 	}
 }
 
+// joinModeChildSteps builds the A/B/C probe DAG shared by the container
+// join_mode tests: A runs in wave 1; B (slow, 0.5s) depends on A so it lands
+// in wave 2; C joins on [A,B] — with join_mode "any" C becomes ready right
+// after wave 1 and races B in wave 2, otherwise it waits for wave 3.
+func joinModeChildSteps(joinMode string) []Step {
+	return []Step{
+		{Name: "A", Action: "log", Message: "a"},
+		{Name: "B", Action: "shell", Command: "sleep 0.5; echo b", DependsOn: []string{"A"}},
+		{Name: "C", Action: "log", Message: "c", DependsOn: []string{"A", "B"}, JoinMode: joinMode},
+	}
+}
+
+// eventPos returns the index of the first event equal to want, or -1.
+func eventPos(events []string, want string) int {
+	for i, ev := range events {
+		if ev == want {
+			return i
+		}
+	}
+	return -1
+}
+
+// runDAGRecordingEvents drives executeDAG directly (bypassing
+// InferDependencies, so the test controls the exact edges) and returns the
+// result plus the ordered step_start/step_complete events ("<type>:<name>").
+func runDAGRecordingEvents(e *Executor, wf *Workflow) (*WorkflowResult, []string) {
+	var mu sync.Mutex
+	var events []string
+	e.OnProgress = func(ev ProgressEvent) {
+		if ev.Type != "step_start" && ev.Type != "step_complete" {
+			return
+		}
+		mu.Lock()
+		events = append(events, ev.Type+":"+ev.Name)
+		mu.Unlock()
+	}
+	result := runDAG(e, wf)
+	mu.Lock()
+	defer mu.Unlock()
+	return result, append([]string(nil), events...)
+}
+
+// TestContainerJoinMode verifies join_mode: any works inside container
+// sub-DAGs — parallel children, condition branches, and foreach iterations —
+// exactly like at the top level (TestExecuteDAG_JoinMode): the joining node
+// starts once its first dependency completes, racing the slower one. Without
+// join_mode (or with "all") the sub-DAG behavior is unchanged: it waits for
+// every dependency. (Previously containers silently treated any as all.)
+func TestContainerJoinMode(t *testing.T) {
+	containers := []struct {
+		name string
+		wrap func(children []Step) Step
+	}{
+		{"parallel", func(children []Step) Step {
+			return Step{Name: "par", Action: "parallel", Steps: children}
+		}},
+		{"condition", func(children []Step) Step {
+			return Step{Name: "check", Action: "condition", Expression: "true",
+				Then: children, Else: []Step{{Name: "no", Action: "log", Message: "no"}}}
+		}},
+		{"foreach", func(children []Step) Step {
+			return Step{Name: "iterate", Action: "foreach", Items: "1", Do: children}
+		}},
+	}
+	joinModes := []struct {
+		name         string
+		joinMode     string
+		cBeforeBDone bool
+	}{
+		{"any: C races the slow dependency", "any", true},
+		{"all: C waits for every dependency", "all", false},
+		{"default (empty) behaves like all", "", false},
+	}
+	for _, ct := range containers {
+		for _, jm := range joinModes {
+			t.Run(ct.name+"/"+jm.name, func(t *testing.T) {
+				wf := &Workflow{
+					Name:  "container-join-" + ct.name,
+					Steps: []Step{ct.wrap(joinModeChildSteps(jm.joinMode))},
+				}
+				result, events := runDAGRecordingEvents(newQuietExecutor(nil), wf)
+				if result.Status != "success" {
+					t.Fatalf("status=%s err=%s", result.Status, result.Error)
+				}
+				cStart := eventPos(events, "step_start:C")
+				bDone := eventPos(events, "step_complete:B")
+				if cStart < 0 || bDone < 0 {
+					t.Fatalf("missing events (cStart=%d bDone=%d): %v", cStart, bDone, events)
+				}
+				if jm.cBeforeBDone && cStart > bDone {
+					t.Errorf("C started AFTER B completed — join_mode: any must apply in %s sub-DAGs; events=%v", ct.name, events)
+				}
+				if !jm.cBeforeBDone && cStart < bDone {
+					t.Errorf("join_mode=%q: C started BEFORE B completed, want after; events=%v", jm.joinMode, events)
+				}
+			})
+		}
+	}
+}
+
+// TestContainerJoinModeAny_ExecutesOnce verifies the any-join fires the node
+// exactly once: after the slower dependency also completes, C is not
+// re-dispatched. The dedup is the same as the top level's — the node is
+// deleted from the waiting set the moment it first becomes ready.
+func TestContainerJoinModeAny_ExecutesOnce(t *testing.T) {
+	wf := &Workflow{
+		Name:  "container-join-once",
+		Steps: []Step{{Name: "par", Action: "parallel", Steps: joinModeChildSteps("any")}},
+	}
+	result, events := runDAGRecordingEvents(newQuietExecutor(nil), wf)
+	if result.Status != "success" {
+		t.Fatalf("status=%s err=%s", result.Status, result.Error)
+	}
+
+	starts := 0
+	for _, ev := range events {
+		if ev == "step_start:C" {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Errorf("step_start:C count=%d, want exactly 1 (no re-dispatch after both deps complete); events=%v", starts, events)
+	}
+
+	// The container result holds exactly one result per child, all successful.
+	if len(result.Steps) != 1 {
+		t.Fatalf("steps=%d, want 1 container", len(result.Steps))
+	}
+	seen := map[string]string{}
+	for _, c := range result.Steps[0].Children {
+		if _, dup := seen[c.Name]; dup {
+			t.Errorf("duplicate child result for %q", c.Name)
+		}
+		seen[c.Name] = c.Status
+	}
+	for _, name := range []string{"A", "B", "C"} {
+		if seen[name] != "success" {
+			t.Errorf("child %s status=%q, want success (all: %v)", name, seen[name], seen)
+		}
+	}
+}
+
 // TestExecuteDAG_FailureBlocking covers how a failed step affects the rest of
 // the DAG: dependents are skipped, continue_on_error unblocks them, and
 // independent wave-mates still execute.

@@ -47,6 +47,17 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 
 	// 逐个迭代执行
 	for i, item := range items {
+		// 取消后不再开始新迭代(如 TUI 提前退出);错误文案与顶层取消一致。
+		if err := e.executionContext().Err(); err != nil {
+			return StepResult{
+				Name:     container.Name,
+				Action:   container.Action,
+				Status:   "failed",
+				Error:    "workflow canceled",
+				Children: allChildren,
+			}
+		}
+
 		// 设置迭代变量
 		e.context.Set(itemVar, item)
 		e.context.Set(itemVar+"_index", fmt.Sprintf("%d", i))
@@ -105,6 +116,8 @@ func (e *Executor) executeForeach(container Step, depth int, result *WorkflowRes
 			failError: func(sr *StepResult) string {
 				return fmt.Sprintf("iteration %d, step '%s' failed: %s", i, sr.Name, sr.Error)
 			},
+			checkCancel: true,
+			joinAny:     true,
 		})
 
 		if failed {
@@ -315,6 +328,8 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		failError: func(sr *StepResult) string {
 			return fmt.Sprintf("child step '%s' failed: %s", sr.Name, sr.Error)
 		},
+		checkCancel: true,
+		joinAny:     true,
 	})
 
 	if failed {

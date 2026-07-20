@@ -3,7 +3,9 @@ package workflow
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/whitefirer/seneschal/workflow/ai"
 )
@@ -212,5 +214,181 @@ func TestExecute_CancellationStopsWorkflow(t *testing.T) {
 		if s.Status == "success" {
 			t.Errorf("step %s succeeded after cancellation", s.Name)
 		}
+	}
+}
+
+// TestExecute_ContainerCancellationStopsChildWaves verifies that canceling a
+// run while a parallel container is mid-schedule stops the container's own
+// wave scheduling too: the in-flight wave finishes, the next wave's child is
+// never dispatched, and the container ends in the same terminal state a
+// top-level cancellation produces ("failed" / "workflow canceled"). Unstarted
+// children get no result — containers intentionally don't synthesize skipped
+// entries on failure.
+func TestExecute_ContainerCancellationStopsChildWaves(t *testing.T) {
+	e := NewExecutor(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.execCtx = ctx
+	e.execCancel = cancel
+
+	// Cancel when the slow child completes: wave 1 (slow+fast) has then
+	// finished successfully, so only the wave-level cancel check — not a
+	// failure cascade — can stop "later" from being dispatched. (The sleep
+	// action is not context-aware, so an already-distributed slow step runs
+	// to completion despite the cancel.)
+	e.SetStepCallback(func(name string, _ StepResult) {
+		if name == "slow" {
+			cancel()
+		}
+	})
+
+	var mu sync.Mutex
+	var events []ProgressEvent
+	e.OnProgress = func(ev ProgressEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+
+	wf := &Workflow{
+		Name: "container-cancel-test",
+		Steps: []Step{
+			{Name: "p", Action: "parallel", Steps: []Step{
+				{Name: "slow", Action: "sleep", Duration: "500ms"},
+				{Name: "fast", Action: "log", Message: "fast"},
+				{Name: "later", Action: "log", Message: "later", DependsOn: []string{"slow"}},
+			}},
+		},
+	}
+
+	start := time.Now()
+	result := e.Execute(wf)
+	elapsed := time.Since(start)
+
+	if result.Status != "failed" {
+		t.Fatalf("status=%s, want failed (canceled)", result.Status)
+	}
+	if !strings.Contains(result.Error, "canceled") {
+		t.Errorf("error %q should mention cancellation", result.Error)
+	}
+
+	// The container got a terminal result: failed with the top-level
+	// cancellation wording.
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected exactly the container result, got %+v", result.Steps)
+	}
+	cont := result.Steps[0]
+	if cont.Status != "failed" || cont.Error != "workflow canceled" {
+		t.Errorf("container result = %s/%q, want failed/\"workflow canceled\"", cont.Status, cont.Error)
+	}
+
+	// slow+fast ran (wave 1); "later" was never dispatched and has no result.
+	childStatus := map[string]string{}
+	for _, c := range cont.Children {
+		childStatus[c.Name] = c.Status
+	}
+	if childStatus["slow"] != "success" || childStatus["fast"] != "success" {
+		t.Errorf("wave-1 children should have succeeded, got %v", childStatus)
+	}
+	if _, ran := childStatus["later"]; ran {
+		t.Error("'later' must not have a result — it should never be dispatched after cancel")
+	}
+
+	// Events: the container received a terminal step_complete (failed); no
+	// step_start was ever emitted for "later".
+	mu.Lock()
+	containerCompleted := false
+	for _, ev := range events {
+		if ev.Type == "step_start" && ev.Name == "later" {
+			t.Error("step_start emitted for 'later' after cancellation")
+		}
+		if ev.Type == "step_complete" && ev.Name == "p" {
+			containerCompleted = true
+			if ev.Status != "failed" {
+				t.Errorf("container step_complete status=%q, want failed", ev.Status)
+			}
+		}
+	}
+	mu.Unlock()
+	if !containerCompleted {
+		t.Error("container never received a terminal step_complete event")
+	}
+
+	// No stuck scheduling: the run returns promptly (the only real work is
+	// the 500ms sleep). Execute joining its wave goroutines on return is the
+	// goroutine-leak guard.
+	if elapsed > 10*time.Second {
+		t.Errorf("execution took %s — possible stuck wave scheduling", elapsed)
+	}
+}
+
+// TestExecute_ForeachCancellationStopsIterations verifies that a canceled run
+// does not start new foreach iterations: the in-flight iteration finishes,
+// later iterations never run, and the container ends failed with the
+// top-level cancellation wording.
+func TestExecute_ForeachCancellationStopsIterations(t *testing.T) {
+	e := NewExecutor(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.execCtx = ctx
+	e.execCancel = cancel
+
+	// Cancel after the first iteration's step completes.
+	var once sync.Once
+	e.SetStepCallback(func(name string, _ StepResult) {
+		if name == "work" {
+			once.Do(cancel)
+		}
+	})
+
+	var mu sync.Mutex
+	workStarts := 0
+	e.OnProgress = func(ev ProgressEvent) {
+		if ev.Type == "step_start" && ev.Name == "work" {
+			mu.Lock()
+			workStarts++
+			mu.Unlock()
+		}
+	}
+
+	wf := &Workflow{
+		Name: "foreach-cancel-test",
+		Steps: []Step{
+			{Name: "iterate", Action: "foreach", Items: "1,2,3,4,5", Do: []Step{
+				{Name: "work", Action: "log", Message: "iter"},
+			}},
+		},
+	}
+
+	start := time.Now()
+	result := e.Execute(wf)
+	elapsed := time.Since(start)
+
+	if result.Status != "failed" {
+		t.Fatalf("status=%s, want failed (canceled)", result.Status)
+	}
+	if !strings.Contains(result.Error, "canceled") {
+		t.Errorf("error %q should mention cancellation", result.Error)
+	}
+
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected exactly the foreach container result, got %+v", result.Steps)
+	}
+	cont := result.Steps[0]
+	if cont.Status != "failed" || cont.Error != "workflow canceled" {
+		t.Errorf("foreach result = %s/%q, want failed/\"workflow canceled\"", cont.Status, cont.Error)
+	}
+
+	// Only iteration 1 ran: exactly one child result and one step_start —
+	// later iterations must not start.
+	if len(cont.Children) != 1 {
+		t.Errorf("children=%d, want 1 (only the first iteration)", len(cont.Children))
+	}
+	mu.Lock()
+	if workStarts != 1 {
+		t.Errorf("work step_start count=%d, want 1 — later iterations must not start", workStarts)
+	}
+	mu.Unlock()
+
+	if elapsed > 10*time.Second {
+		t.Errorf("execution took %s — possible stuck iteration loop", elapsed)
 	}
 }
