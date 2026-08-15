@@ -1,5 +1,5 @@
 // 图形编辑器画布：React Flow + 工具栏 + 保存/运行。
-// 数据转换用 lib/stepGraph.ts（透传），节点 UI 用 StepNode.tsx。
+// 数据转换用 lib/stepGraph.ts（透传），节点 UI 用 StepNode.tsx，容器分组用 GroupNode.tsx。
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   ReactFlow, Background, Controls, MiniMap, BackgroundVariant,
@@ -7,9 +7,10 @@ import {
 } from '@xyflow/react'
 import { Plus, Save, Play, GitGraph } from 'lucide-react'
 import StepNode, { type StepNodeHandlers } from './StepNode'
+import GroupNode from './GroupNode'
 import { stepsToGraph, graphToSteps, type StepGraphNode, type StepGraphEdge } from '@/lib/stepGraph'
 
-const nodeTypes = { step: StepNode }
+const nodeTypes = { step: StepNode, group: GroupNode }
 
 // 稳定节点 id 计数器
 let nodeSeq = 0
@@ -35,34 +36,84 @@ function makeNode(data: Record<string, any>, parentId?: string, branchType?: str
   }
 }
 
-// 简单左→右布局（深度 = 到根的最长路径）
-function layout(nodes: StepGraphNode[], edges: StepGraphEdge[]): Record<string, { x: number; y: number }> {
-  const preds = new Map<string, string[]>()
-  nodes.forEach((n) => preds.set(n.id, []))
-  for (const e of edges) if (preds.has(e.target)) preds.get(e.target)!.push(e.source)
-  nodes.forEach((n) => {
-    const p = n.data.__parentId
-    if (p && preds.has(n.id)) preds.get(n.id)!.push(p)
-  })
-  const depth = new Map<string, number>(nodes.map((n) => [n.id, 0]))
+// 容器 action → 分支列表
+const CONTAINER_BRANCHES: Record<string, string[]> = {
+  condition: ['then', 'else'],
+  parallel: ['parallel'],
+  foreach: ['do'],
+  loop: ['do'],
+}
+
+// 由 rawNodes + edges 计算 React Flow 节点（含容器分组 + 布局）
+function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handlers: StepNodeHandlers): Node[] {
+  const nodes: Node[] = []
+  const tops = rawNodes.filter((n) => !n.data.__parentId)
+  const topIds = new Set(tops.map((n) => n.id))
+
+  // 顶层深度（只考虑顶层节点之间的边）
+  const preds = new Map<string, string[]>(tops.map((n) => [n.id, []]))
+  for (const e of edges) if (topIds.has(e.target)) preds.get(e.target)!.push(e.source)
+  const depth = new Map<string, number>(tops.map((n) => [n.id, 0]))
   for (let k = 0; k < 200; k++) {
     let changed = false
-    for (const n of nodes) {
+    for (const n of tops) {
       let d = 0
       for (const p of preds.get(n.id) || []) d = Math.max(d, (depth.get(p) ?? 0) + 1)
       if (d !== depth.get(n.id)) { depth.set(n.id, d); changed = true }
     }
     if (!changed) break
   }
+
+  // 顶层节点 x/y（按深度分列）
   const yCursor = new Map<number, number>()
-  const pos: Record<string, { x: number; y: number }> = {}
-  nodes.forEach((n) => {
+  const topPos = new Map<string, { x: number; y: number }>()
+  tops.forEach((n) => {
     const d = depth.get(n.id) ?? 0
     const y = yCursor.get(d) ?? 0
-    pos[n.id] = { x: d * 300, y: y * 160 }
+    topPos.set(n.id, { x: d * 380, y: y * 200 })
     yCursor.set(d, y + 1)
   })
-  return pos
+
+  const handled = new Set<string>()
+  for (const top of tops) {
+    const branches = CONTAINER_BRANCHES[top.data.action]
+    if (!branches) continue
+    const base = topPos.get(top.id)!
+    let gy = base.y
+    for (const branch of branches) {
+      const children = rawNodes
+        .filter((n) => n.data.__parentId === top.id && n.data.__branchType === branch)
+        .sort((a, b) => (a.data.__branchIndex ?? 0) - (b.data.__branchIndex ?? 0))
+      if (!children.length) continue
+      const groupId = top.id + '::' + branch
+      const pad = 16, headerH = 30, gap = 16, cw = 240, ch = 130
+      const gw = cw + pad * 2
+      const gh = headerH + children.length * ch + (children.length - 1) * gap + pad * 2
+      nodes.push({
+        id: groupId, type: 'group', position: { x: base.x + 340, y: gy },
+        width: gw, height: gh,
+        data: { branch, kind: top.data.action === 'condition' ? 'condition' : top.data.action === 'parallel' ? 'parallel' : 'foreach' },
+      })
+      children.forEach((c, i) => {
+        nodes.push({
+          id: c.id, type: 'step', parentId: groupId, extent: 'parent' as const,
+          position: { x: pad, y: headerH + pad + i * (ch + gap) },
+          data: { ...c.data, __handlers: handlers },
+        })
+      })
+      gy += gh + 28
+    }
+    nodes.push({ id: top.id, type: 'step', position: base, data: { ...top.data, __handlers: handlers } })
+    handled.add(top.id)
+  }
+
+  // 非容器顶层节点
+  for (const top of tops) {
+    if (handled.has(top.id)) continue
+    nodes.push({ id: top.id, type: 'step', position: topPos.get(top.id)!, data: { ...top.data, __handlers: handlers } })
+  }
+
+  return nodes
 }
 
 export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditorProps) {
@@ -72,9 +123,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
   // 初始化
   useEffect(() => {
     const g = stepsToGraph(initialSteps || [])
-    const pos = layout(g.nodes, g.edges)
-    const positioned = g.nodes.map((n) => ({ ...n, position: pos[n.id] || { x: 0, y: 0 } }))
-    setRawNodes(positioned)
+    setRawNodes(g.nodes)
     setEdges(g.edges.map((e) => ({
       id: e.id, source: e.source, target: e.target, type: 'smoothstep',
       markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
@@ -82,12 +131,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
     })))
   }, [initialSteps])
 
-  const relayout = useCallback((nodes: StepGraphNode[], es: StepGraphEdge[]) => {
-    const pos = layout(nodes, es)
-    return nodes.map((n) => ({ ...n, position: pos[n.id] || n.position || { x: 0, y: 0 } }))
-  }, [])
-
-  // ── 操作（全部用函数式更新，handlers 稳定） ─────────────────────────
+  // ── 操作（函数式更新，handlers 稳定） ──────────────────────────────
   const handlers: StepNodeHandlers = {
     onChange: (id, patch) => {
       setRawNodes((prev) => prev.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)))
@@ -96,18 +140,12 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
       setRawNodes((prev) => {
         const siblings = prev.filter((n) => n.data.__parentId === id && n.data.__branchType === branchType)
         const child = makeNode({}, id, branchType, siblings.length)
-        return relayout([...prev, child], edges)
+        return [...prev, child]
       })
     },
     onAddNext: (id) => {
       const childId = nextId()
-      setRawNodes((prev) => {
-        const siblings = prev.filter((n) => n.data.__parentId === (prev.find((x) => x.id === id)?.data.__parentId))
-        const child = makeNode({}, undefined, undefined, siblings.length)
-        // 用固定 id 保证边引用一致
-        child.id = childId
-        return relayout([...prev, child], edges)
-      })
+      setRawNodes((prev) => [...prev, makeNode({}, undefined, undefined, prev.length)])
       setEdges((prev) => [...prev, {
         id: id + '->' + childId, source: id, target: childId, type: 'smoothstep',
         markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
@@ -115,7 +153,6 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
       }])
     },
     onDelete: (id) => {
-      // 删除节点及其后代
       const descendants = (root: string): string[] => {
         const kids = rawNodes.filter((n) => n.data.__parentId === root).map((n) => n.id)
         return kids.flatMap((k) => [k, ...descendants(k)])
@@ -126,13 +163,11 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
     },
   }
 
-  // React Flow 节点：rawNodes + __handlers（稳定引用）
-  const rfNodes: Node[] = useMemo(() => rawNodes.map((n) => ({
-    id: n.id,
-    type: 'step',
-    position: n.position || { x: 0, y: 0 },
-    data: { ...n.data, __handlers: handlers },
-  })), [rawNodes]) // eslint-disable-line react-hooks/exhaustive-deps
+  const rfNodes: Node[] = useMemo(
+    () => computeGraph(rawNodes, edges, handlers),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawNodes, edges]
+  )
 
   const onConnect = useCallback((c: Connection) => {
     if (!c.source || !c.target || c.source === c.target) return
@@ -169,7 +204,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
           <span>Nodes: {rawNodes.length} · Edges: {edges.length}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setRawNodes((prev) => relayout([...prev, makeNode({}, undefined, undefined, prev.length)], edges))}
+          <button onClick={() => setRawNodes((prev) => [...prev, makeNode({}, undefined, undefined, prev.length)])}
             className="flex items-center gap-1 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded text-sm">
             <Plus className="w-4 h-4" /> 节点
           </button>
