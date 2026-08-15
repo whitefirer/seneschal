@@ -241,25 +241,52 @@ func (wf *Workflow) fillRuntimeMetadata(steps []Step, parentId, branchType strin
 	}
 }
 
+// explicitNextTargets collects the targets of all explicit next edges in the
+// slice before any auto-chaining mutates it. Auto-chaining must not add a new
+// next edge from a step that is already an explicit fan-out target (e.g.
+// root.next=[a,b] plus auto a.next=[b] would make b wait for a).
+func explicitNextTargets(steps []Step) map[string]bool {
+	targets := make(map[string]bool)
+	for _, step := range steps {
+		for _, n := range step.Next {
+			targets[n] = true
+		}
+	}
+	return targets
+}
+
+// isExplicitNextTarget reports whether step is named as an explicit next
+// target (by name or by effective ID).
+func isExplicitNextTarget(targets map[string]bool, step *Step) bool {
+	if targets[step.Name] {
+		return true
+	}
+	id := getStepId(step)
+	return id != "" && targets[id]
+}
+
 // inferLinearDependencies 推断线性流程的相邻节点依赖
 func (wf *Workflow) inferLinearDependencies(steps []Step) {
 	if len(steps) > 1 {
+		explicitTargets := explicitNextTargets(steps)
 		for i := 0; i < len(steps)-1; i++ {
 			current := &steps[i]
 			next := &steps[i+1]
+			currentId := getStepId(current)
+			nextId := getStepId(next)
 
-			// 如果没有显式 next，添加后继
-			if len(current.Next) == 0 {
-				currentId := getStepId(current)
-				nextId := getStepId(next)
+			// 如果没有显式 next、后继也没有显式 depends_on，并且当前步骤
+			// 不是显式 next 的扇出目标，才添加后继。否则会把扇出分支
+			// （root.next=[a,b]）串行化成 a→b。
+			if len(current.Next) == 0 && len(next.DependsOn) == 0 && !isExplicitNextTarget(explicitTargets, current) {
 				if currentId != "" && nextId != "" {
 					current.Next = []string{nextId}
 				}
 			}
 
-			// 如果没有显式 depends_on，添加前驱
-			if len(next.DependsOn) == 0 {
-				currentId := getStepId(current)
+			// 如果没有显式 depends_on，添加前驱（保留“默认顺序执行”的
+			// 线性语义；同样跳过扇出目标，避免把并行分支串起来）。
+			if len(next.DependsOn) == 0 && !isExplicitNextTarget(explicitTargets, current) {
 				if currentId != "" {
 					next.DependsOn = append(next.DependsOn, currentId)
 				}
@@ -375,11 +402,13 @@ func (wf *Workflow) inferContainerDependenciesRecursive(steps []Step) {
 						firstThen.DependsOn = append(firstThen.DependsOn, parentId)
 					}
 				}
-				// then 子节点之间链式连接
+				// then 子节点之间链式连接（显式 DAG 依赖优先：已有 next /
+				// depends_on 或当前节点是扇出目标时不再自动加边）
+				thenTargets := explicitNextTargets(step.Then)
 				for j := 0; j < len(step.Then)-1; j++ {
 					current := &step.Then[j]
 					next := &step.Then[j+1]
-					if len(current.Next) == 0 {
+					if len(current.Next) == 0 && len(next.DependsOn) == 0 && !isExplicitNextTarget(thenTargets, current) {
 						currentId := getStepId(current)
 						nextId := getStepId(next)
 						if currentId != "" && nextId != "" {
@@ -422,11 +451,13 @@ func (wf *Workflow) inferContainerDependenciesRecursive(steps []Step) {
 						firstDo.DependsOn = append(firstDo.DependsOn, parentId)
 					}
 				}
-				// do 子节点之间链式连接
+				// do 子节点之间链式连接（显式 DAG 依赖优先：已有 next /
+				// depends_on 或当前节点是扇出目标时不再自动加边）
+				doTargets := explicitNextTargets(step.Do)
 				for j := 0; j < len(step.Do)-1; j++ {
 					current := &step.Do[j]
 					next := &step.Do[j+1]
-					if len(current.Next) == 0 {
+					if len(current.Next) == 0 && len(next.DependsOn) == 0 && !isExplicitNextTarget(doTargets, current) {
 						currentId := getStepId(current)
 						nextId := getStepId(next)
 						if currentId != "" && nextId != "" {

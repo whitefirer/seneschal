@@ -392,3 +392,107 @@ func TestExecute_ForeachCancellationStopsIterations(t *testing.T) {
 		t.Errorf("execution took %s — possible stuck iteration loop", elapsed)
 	}
 }
+
+// TestRunWaves_ReadyOrderDeterministic verifies that after the first wave,
+// newly ready nodes are scheduled in declaration order even though they are
+// collected from a map. Without an explicit sort, two fan-out branches could
+// run — and appear in results — in random order across runs.
+func TestRunWaves_ReadyOrderDeterministic(t *testing.T) {
+	e := NewExecutor(nil)
+	graph := map[string]*DAGNode{
+		"a": {Step: Step{Name: "a"}, ID: "a", Order: 0},
+		"b": {Step: Step{Name: "b"}, ID: "b", DependsOn: []string{"a"}, Order: 1},
+		"c": {Step: Step{Name: "c"}, ID: "c", DependsOn: []string{"a"}, Order: 2},
+	}
+	order := []string{"a", "b", "c"}
+
+	for i := 0; i < 100; i++ {
+		var got []string
+		cfg := waveConfig{
+			graph: graph,
+			order: order,
+			exec: func(node *DAGNode) StepResult {
+				return StepResult{Name: node.Step.Name, Status: "success"}
+			},
+			collect: func(id string, sr *StepResult) {
+				got = append(got, id)
+			},
+			failError: func(sr *StepResult) string { return sr.Name },
+		}
+		failed, firstErr := e.runWaves(cfg)
+		if failed {
+			t.Fatalf("runWaves failed: %s", firstErr)
+		}
+		if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+			t.Fatalf("run %d: order=%v, want [a b c]", i, got)
+		}
+	}
+}
+
+// TestExecute_FanOutRunsInParallel is an end-to-end regression test for the
+// parser auto-chaining bug that serialized root.next=[a,b] into root→a→b.
+// A custom blocking action proves concurrency deterministically: both branch
+// steps must enter their Run handler before either one is released.
+func TestExecute_FanOutRunsInParallel(t *testing.T) {
+	const actionName = "fanout_probe"
+	started := make(chan string, 4)
+	release := make(chan struct{})
+
+	registerForTest(t, ActionSpec{
+		Name: actionName,
+		Run: func(e *Executor, step Step, result *StepResult, stepID string, depth int, parentID string) error {
+			started <- step.Name
+			<-release
+			result.Output = step.Name
+			return nil
+		},
+	})
+
+	wf := &Workflow{
+		Name: "fanout-parallel",
+		Steps: []Step{
+			{Name: "root", Action: "log", Message: "root", Next: []string{"a", "b"}},
+			{Name: "a", Action: actionName},
+			{Name: "b", Action: actionName},
+		},
+	}
+	e := NewExecutor(nil)
+	e.printer = NoopPrinter{}
+
+	done := make(chan *WorkflowResult, 1)
+	go func() {
+		done <- e.Execute(wf)
+	}()
+
+	// The two branch steps should both start before either finishes. If the
+	// parser serialized them (a→b), the second start never arrives while the
+	// first one is blocked.
+	var got []string
+	timeout := time.After(5 * time.Second)
+	for len(got) < 2 {
+		select {
+		case name := <-started:
+			got = append(got, name)
+		case <-timeout:
+			close(release) // unblock the branch that did start
+			<-done
+			t.Fatalf("fan-out steps did not run concurrently: started=%v", got)
+		}
+	}
+	close(release)
+
+	res := <-done
+	if res.Status != "success" {
+		t.Fatalf("status=%s err=%s", res.Status, res.Error)
+	}
+	if len(res.Steps) != 3 {
+		t.Fatalf("want 3 step results, got %d", len(res.Steps))
+	}
+	seen := map[string]bool{}
+	for _, sr := range res.Steps {
+		seen[sr.Name] = true
+	}
+	if !seen["root"] || !seen["a"] || !seen["b"] {
+		t.Fatalf("missing executed steps in %+v", res.Steps)
+	}
+}

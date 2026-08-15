@@ -805,6 +805,13 @@ func (e *Executor) runWaves(cfg waveConfig) (failed bool, firstErr string) {
 		}
 	}
 
+	// Precompute declaration-order positions so every wave's ready slice is
+	// deterministic regardless of map iteration order in the waiting map.
+	orderIndex := make(map[string]int, len(cfg.order))
+	for i, id := range cfg.order {
+		orderIndex[id] = i
+	}
+
 	// Execute in waves (parallel execution of independent nodes)
 	for len(ready) > 0 && !failed {
 		// Stop scheduling new waves once the run is canceled (e.g. TUI quit).
@@ -890,6 +897,9 @@ func (e *Executor) runWaves(cfg waveConfig) (failed bool, firstErr string) {
 			}
 		}
 
+		sort.Slice(newReady, func(i, j int) bool {
+			return orderIndex[newReady[i]] < orderIndex[newReady[j]]
+		})
 		ready = newReady
 	}
 
@@ -898,10 +908,6 @@ func (e *Executor) runWaves(cfg waveConfig) (failed bool, firstErr string) {
 	// topological order first — otherwise two failing runs of the same
 	// workflow produce differently ordered skipped results.
 	if failed && cfg.markSkipped != nil {
-		orderIndex := make(map[string]int, len(cfg.order))
-		for i, id := range cfg.order {
-			orderIndex[id] = i
-		}
 		remaining := make([]string, 0, len(waiting))
 		for id := range waiting {
 			remaining = append(remaining, id)

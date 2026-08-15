@@ -116,6 +116,61 @@ func TestInferDependencies_NextToDependsOn(t *testing.T) {
 	}
 }
 
+func TestInferDependencies_FanOutNotSerialized(t *testing.T) {
+	// root.next=[a,b] must produce a fan-out, not a chain root→a→b. The
+	// auto-linear chaining used to add a.next=[b] (because a had no explicit
+	// next), which then folded into b.depends_on and serialized the branches.
+	wf := &Workflow{
+		Name: "fanout",
+		Steps: []Step{
+			{Name: "root", Action: "log", Message: "root", Next: []string{"a", "b"}},
+			{Name: "a", Action: "log", Message: "a"},
+			{Name: "b", Action: "log", Message: "b"},
+		},
+	}
+	if err := wf.InferDependencies(); err != nil {
+		t.Fatalf("InferDependencies: %v", err)
+	}
+	if !containsStr(wf.Steps[1].DependsOn, "root") {
+		t.Error("a should depend on root (from next folding)")
+	}
+	if containsStr(wf.Steps[1].Next, "b") {
+		t.Error("a should not have an inferred next edge to b; fan-out was serialized")
+	}
+	if !containsStr(wf.Steps[2].DependsOn, "root") {
+		t.Error("b should depend on root (from next folding)")
+	}
+	if containsStr(wf.Steps[2].DependsOn, "a") {
+		t.Error("b must not depend on a; fan-out was serialized")
+	}
+}
+
+func TestInferDependencies_ExplicitDependsOnSkipsAutoChain(t *testing.T) {
+	// A step with explicit depends_on must not gain an extra auto-chained
+	// dependency from its adjacent sibling (b→c), but the default linear
+	// chain before the explicit DAG part (a→b) is preserved.
+	wf := &Workflow{
+		Name: "explicit",
+		Steps: []Step{
+			{Name: "a", Action: "log", Message: "a"},
+			{Name: "b", Action: "log", Message: "b"},
+			{Name: "c", Action: "log", Message: "c", DependsOn: []string{"a"}},
+		},
+	}
+	if err := wf.InferDependencies(); err != nil {
+		t.Fatalf("InferDependencies: %v", err)
+	}
+	if !containsStr(wf.Steps[1].DependsOn, "a") {
+		t.Error("b should depend on a (default linear chain before the explicit DAG)")
+	}
+	if containsStr(wf.Steps[2].DependsOn, "b") {
+		t.Error("c should not depend on b (explicit depends_on wins, no auto-chain onto c)")
+	}
+	if !containsStr(wf.Steps[2].DependsOn, "a") {
+		t.Error("c should keep its explicit depends_on a")
+	}
+}
+
 func TestParseOutputMode(t *testing.T) {
 	tests := map[string]OutputMode{
 		"plain":   OutputModePlain,
