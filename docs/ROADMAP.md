@@ -25,7 +25,7 @@
 | 11 | Artifact 管理 | 📋 计划 | 4 |
 | 11.5 | 变量脱敏(敏感数据保护) | 📋 计划 | 5 |
 | 12 | IM 渠道(飞书等) | 📋 计划 | 2, 3, 5 |
-| 13 | 更多 provider(OpenAI 兼容) | 📋 计划 | 2 |
+| 13 | 更多 provider(OpenAI 兼容) | ✅ 完成 | 2 |
 | 14 | 执行沙箱(sandbox/WASM/docker) | 📋 计划 | 11, 8 |
 | 15 | Playbook(可分享可执行文档) | 📋 计划 | 12 |
 | 16 | 项目文档站点(VitePress + asciinema) | 📋 计划 | — |
@@ -172,7 +172,7 @@ seneschal explain deploy.yaml    # 解释这段 YAML 在干嘛
 
 ---
 
-## Phase 5.5 — Artifact 管理 📋 计划
+## Phase 11 — Artifact 管理 📋 计划
 
 **目标**:workflow 的执行产物(artifact)可声明、可追踪、可从历史取回。
 
@@ -189,7 +189,7 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 
 ---
 
-## Phase 6 — 重试与可靠性 📋 计划
+## Phase 6 — 重试与可靠性 ✅ 完成
 
 **目标**:AI provider 偶发错误自动重试 + step 级业务重试。最基础的可靠性保障。
 
@@ -209,7 +209,7 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 
 ---
 
-## Phase 7 — Token 治理 📋 计划
+## Phase 7 — Token 治理 ✅ 完成
 
 **目标**:AI 成本可控,workflow 跑飞了不会账单飞了。
 
@@ -225,7 +225,7 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 
 ---
 
-## Phase 8 — Inline script action 📋 计划
+## Phase 8 — Inline script action ✅ 完成
 
 **目标**:step 内嵌代码片段,复杂逻辑不用写 shell 脚本文件。
 
@@ -237,7 +237,7 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 
 ---
 
-## Phase 8.5 — 变量脱敏(敏感数据保护) 📋 计划
+## Phase 11.5 — 变量脱敏(敏感数据保护) 📋 计划
 
 **目标**:执行者不一定该看到所有变量值(密钥、token、内部配置),展示层脱敏。
 
@@ -249,7 +249,7 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 - [ ] 权限分层:`admin`(看明文) vs `executor`(看脱敏)——为未来多用户铺路
 
 ### 定位
-和 Phase 7(Token 治理)同属"安全/治理"范畴。在多用户场景(Phase 12 sandbox)之前做展示层脱敏,成本低、价值清晰。
+和 Phase 7(Token 治理)同属"安全/治理"范畴。在多用户场景(Phase 14 sandbox)之前做展示层脱敏,成本低、价值清晰。
 
 ### 用法示例
 ```yaml
@@ -265,11 +265,11 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 ```
 
 ### 定位
-YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 Phase 12(sandbox)配合用于不可信代码。
+YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 Phase 14(sandbox)配合用于不可信代码。
 
 ---
 
-## Phase 9 — IM 渠道
+## Phase 12 — IM 渠道
 
 **目标**:飞书等 IM 触发工作流并实时看结果。
 
@@ -285,7 +285,7 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
 
 ---
 
-## Phase 10 — 容错(on_error: ai)
+## Phase 10 — 容错(on_error: ai) ✅ 完成
 
 **目标**:失败时 AI 介入给建议/决定重试。
 
@@ -293,11 +293,11 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
 - [ ] step 级 `on_error: ai` 配置
 - [ ] 失败上下文(命令、输出、错误)喂给 AI,产出建议 / 重试决策
 - [ ] 重试策略与围栏(不让 AI 无限重试)
-- [ ] 作为 Phase 15(hook)的一个内置实例
+- [ ] 作为 Phase 17(hook)的一个内置实例
 
 ---
 
-## Phase 10.5 — 子工作流 + AI 结构化输出 📋 计划
+## Phase 10.5 — 子工作流 + AI 结构化输出 ✅ 完成
 
 **目标**：让 AI 能输出结构化参数给下游 step；让工作流能调用其他工作流，实现复杂编排。
 
@@ -333,18 +333,18 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
 
 ---
 
-## Phase 11 — Artifact 管理
+## Phase 13 — 更多 provider(OpenAI 兼容 / Ollama) ✅ 完成
 
 **目标**:覆盖更多模型生态。
 
 ### 交付
-- [ ] `OpenAIProvider`(`/chat/completions`,`base_url` 可配 → OpenAI / Moonshot / 智谱 / Groq / Ollama-OpenAI 模式 / LM Studio)
-- [ ] `OllamaProvider`(native,本地零配置)
-- [ ] provider 选择可在 CLI flag / 配置文件切换
+- [x] `OpenAIProvider`(`/chat/completions`,`base_url` 可配 → OpenAI / Moonshot / 智谱 / Groq / Ollama-OpenAI 模式 / LM Studio)
+- [x] `OllamaProvider`(native,本地零配置)
+- [x] provider 选择可在 CLI flag / 配置文件切换
 
 ---
 
-## Phase 12 — 执行沙箱(sandbox/WASM/docker) 📋 计划
+## Phase 14 — 执行沙箱(sandbox/WASM/docker) 📋 计划
 
 **目标**:隔离执行环境,让 shell/script action 不污染宿主。和多用户/安全强相关。
 
@@ -373,22 +373,22 @@ sandbox 是基础设施级工程,和 AI 主线正交。在单机/可信内网场
 
 ---
 
-## Phase 13 — Playbook(可分享可执行文档) 📋 计划
+## Phase 15 — Playbook(可分享可执行文档) 📋 计划
 
 **目标**:workflow + 说明 = playbook,可分享给他人照着跑。
 
 ### 交付
 - [ ] playbook 格式:workflow YAML + 文档段(README + 步骤说明 + 前置条件)
 - [ ] playbook 仓库(可分享链接,接收方一键运行)
-- [ ] 和渠道(Phase 9)集成:飞书/Web 推送 playbook 卡片,点击执行
+- [ ] 和渠道(Phase 12)集成:飞书/Web 推送 playbook 卡片,点击执行
 - [ ] playbook 版本化
 
 ### 定位
-playbook 是渠道(Phase 9)的延伸:不只是"执行结果推到飞书",而是"可执行的文档推到飞书"。
+playbook 是渠道(Phase 12)的延伸:不只是"执行结果推到飞书",而是"可执行的文档推到飞书"。
 
 ---
 
-## Phase 14 — 项目文档站点(VitePress + asciinema) 📋 计划
+## Phase 16 — 项目文档站点(VitePress + asciinema) 📋 计划
 
 **目标**:项目文档站点化 + 终端演示录制。
 
@@ -403,7 +403,7 @@ playbook 是渠道(Phase 9)的延伸:不只是"执行结果推到飞书",而是"
 
 ---
 
-## Phase 15 — Hook 与通知 📋 计划
+## Phase 17 — Hook 与通知 ✅ 完成
 
 **目标**:执行生命周期的扩展点(hook)+ 开箱即用的通知能力。
 
@@ -419,34 +419,7 @@ playbook 是渠道(Phase 9)的延伸:不只是"执行结果推到飞书",而是"
 - [ ] 通知模板:step 结果/workflow 摘要/失败详情
 
 ### 定位
-hook 是"让用户挂钩自定义逻辑"的通用机制;通知是"最常见场景(完成时推消息)"的预设,让用户不写代码就能用。和 Phase 9(IM 渠道)的区别:渠道是"触发+看结果"的双向,hook/通知是"单向推"的。
-
----
-
-## Phase 16 — 前端架构优化 📋 计划
-
-**目标**:清理前端技术债,提升可维护性。
-
-### 交付
-- [ ] **JSON tag 统一**(`stepId`/`step_id` 选一种,后端 + 前端同步,删掉双字段兜底)
-- [ ] **Execution.tsx 拆分**(2041 行 → `<StepList>` / `<StepDetail>` / `<LogPanel>`)
-- [ ] 全局 toast/error 通知机制(替代散落的 console.error)
-- [ ] 状态字符串常量化(前后端同步)
-- [ ] 历史管理前端 UI(复用 Phase 4 的 history API)
-- [ ] bundle 拆分(当前 766KB 单 chunk,code-split)
-
----
-
-## Phase 17 — (暂缓)AI 动态编排
-
-**目标**(若做):AI 在执行中动态注入/修改步骤。
-
-**暂缓原因**:
-- 摧毁可重复性与可测试性
-- 安全风险指数级放大(AI 动态生成 shell 并执行)
-- 需要重新定义"执行/重跑/测试"的含义
-
-若未来做,需先解决:执行沙箱、AI 可执行能力白名单、完整审计日志、可观测性大幅增强。
+hook 是"让用户挂钩自定义逻辑"的通用机制;通知是"最常见场景(完成时推消息)"的预设,让用户不写代码就能用。和 Phase 12(IM 渠道)的区别:渠道是"触发+看结果"的双向,hook/通知是"单向推"的。
 
 ---
 
@@ -477,9 +450,47 @@ variables:
 ```
 
 ### 已知边界
-- **简化 cron**:仅支持 `*/N * * * *`(每 N 分钟)、`M H * * *`(每天,简化为每 24h 起跑)、Go duration;非完整 cron 解析器。
 - **无前端面板**:runbook 目前仅 API + CLI 操作,Web UI 无管理入口。
 - **无内置示例**:`runbooks/` 默认空,参考 `examples/runbook-*.yaml`。
+
+---
+
+## Phase 19 — E2E 测试（HTTP API + CLI 黑盒）✅ 完成
+
+**目标**:用黑盒测试覆盖 HTTP API 与 CLI 的关键路径,防回归。
+
+### 交付
+- [x] `api/e2e_test.go` / `api/routes_e2e_test.go` —— HTTP API 端到端(workflow CRUD/run、runbook lifecycle/trigger/webhook、负路径)
+- [x] `api/security_test.go` —— 路径穿越、请求体大小限制等安全测试
+- [x] `cmd/cli/cli_e2e_test.go` —— CLI 黑盒测试
+- [x] `api/runbook_trigger_ws_test.go` —— runbook 触发事件广播 + 触发来源标注
+
+---
+
+## Phase 20 — 前端架构优化 📋 计划
+
+**目标**:清理前端技术债,提升可维护性。
+
+### 交付
+- [ ] **JSON tag 统一**(`stepId`/`step_id` 选一种,后端 + 前端同步,删掉双字段兜底)
+- [ ] **Execution.tsx 拆分**(2041 行 → `<StepList>` / `<StepDetail>` / `<LogPanel>`)
+- [ ] 全局 toast/error 通知机制(替代散落的 console.error)
+- [ ] 状态字符串常量化(前后端同步)
+- [ ] 历史管理前端 UI(复用 Phase 4 的 history API)
+- [ ] bundle 拆分(当前 766KB 单 chunk,code-split)
+
+---
+
+## Phase 21 — (暂缓)AI 动态编排
+
+**目标**(若做):AI 在执行中动态注入/修改步骤。
+
+**暂缓原因**:
+- 摧毁可重复性与可测试性
+- 安全风险指数级放大(AI 动态生成 shell 并执行)
+- 需要重新定义"执行/重跑/测试"的含义
+
+若未来做,需先解决:执行沙箱、AI 可执行能力白名单、完整审计日志、可观测性大幅增强。
 
 ---
 
