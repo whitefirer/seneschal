@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, lazy, Suspense } from 'react'
 import { useNavigate } from 'react-router-dom'
+import type { RawExecutionStep } from '@/types/execution'
 import { Send, Bot, User, Loader2, Play, Sparkles, GitBranch, ChevronDown, ChevronRight, ExternalLink, X, CheckCircle, XCircle, Clock, RotateCw, FileCode, Lock } from 'lucide-react'
 import { chatApi, workflowsApi, executionsApi, type ChatSelection, type ChatStep } from '@/api/client'
 import { MarkdownView } from './MarkdownView'
@@ -9,7 +10,7 @@ const Mermaid = lazy(() => import('./Mermaid'))
 interface ExecState {
   id: string
   status: string
-  steps?: any[]
+  steps?: RawExecutionStep[]
 }
 
 interface ToolStep {
@@ -26,7 +27,9 @@ interface Message {
   thinking?: boolean
   selection?: ChatSelection
   toolSteps?: ToolStep[]   // agent tool use process
+  executionId?: string     // set after run_workflow returns
 }
+
 
 const STORAGE_KEY = 'seneschal-chat-messages'
 
@@ -102,7 +105,7 @@ export default function ChatPanel() {
             const next = [...prev]
             const last = next[next.length - 1]
             if (!last.toolSteps) last.toolSteps = []
-            last.toolSteps.push({ tool: event.tool, input: event.input })
+            last.toolSteps.push({ tool: event.tool || '', input: event.input })
             last.thinking = false
             next[next.length - 1] = { ...last }
             return next
@@ -124,7 +127,7 @@ export default function ChatPanel() {
             }
             // run_workflow returns executionId — set on message for ExecProgress
             if (event.executionId) {
-              ;(last as any).executionId = event.executionId
+              last.executionId = event.executionId
             }
             next[next.length - 1] = { ...last }
             return next
@@ -144,8 +147,8 @@ export default function ChatPanel() {
           })
         }
       }, ac.signal, history)
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
+    } catch (err) {
+      if (err instanceof Error && err.name !== 'AbortError') {
         setMessages((prev) => {
           const next = [...prev]
           next[next.length - 1] = { role: 'assistant', content: `请求失败：${err.message}` }
@@ -168,14 +171,14 @@ export default function ChatPanel() {
       setMessages((prev) => {
         const next = [...prev]
         if (next[msgIndex]?.selection) {
-          ;(next[msgIndex].selection as any).executionId = res.executionId
+          next[msgIndex].selection!.executionId = res.executionId
         }
         return [...next] // trigger re-render
       })
-    } catch (err: any) {
+    } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: `执行失败：${err.message}` },
+        { role: 'assistant', content: `执行失败：${err instanceof Error ? err.message : String(err)}` },
       ])
     } finally {
       setLoading(false)
@@ -212,7 +215,7 @@ export default function ChatPanel() {
                   onRun={() => runSelection(i, m.selection!)}
                   loading={loading}
                   onNavigate={(id) => navigate(`/execution/${id}`)}
-                  execId={(m as any).executionId}
+                  execId={m.executionId}
                 />
               )}
               {/* AI text response — after the card */}
@@ -556,11 +559,11 @@ function ExecProgress({ execId, onNavigate, onRerun }: { execId: string; onNavig
 
 // collectOutputs extracts steps that have meaningful output text (for the
 // output-results section). Skips steps with empty or trivial output.
-function collectOutputs(steps: any[]): { name: string; output: string }[] {
+function collectOutputs(steps: RawExecutionStep[]): { name: string; output: string }[] {
   const out: { name: string; output: string }[] = []
   for (const s of steps) {
     if (s.output && s.output.trim() && s.output !== '(dry run)') {
-      out.push({ name: s.name, output: s.output })
+      out.push({ name: s.name || 'step', output: s.output })
     }
     if (s.children) out.push(...collectOutputs(s.children))
     if (s.then_children) out.push(...collectOutputs(s.then_children))
@@ -571,17 +574,17 @@ function collectOutputs(steps: any[]): { name: string; output: string }[] {
 
 // ExecStepTree renders execution steps with indentation. Container steps
 // (parallel/foreach) auto-collapse their children and show N/M completion.
-function ExecStepTree({ steps, depth }: { steps: any[]; depth: number }) {
+function ExecStepTree({ steps, depth }: { steps: RawExecutionStep[]; depth: number }) {
   return (
     <div className={depth > 0 ? 'ml-3 border-l border-border pl-2 space-y-0.5' : 'space-y-0.5'}>
-      {steps.map((s: any, i: number) => (
+      {steps.map((s, i) => (
         <ExecStepLine key={i} step={s} depth={depth} />
       ))}
     </div>
   )
 }
 
-function ExecStepLine({ step: s, depth }: { step: any; depth: number }) {
+function ExecStepLine({ step: s, depth }: { step: RawExecutionStep; depth: number }) {
   // Container steps (parallel/foreach/loop) with children: show as collapsible
   // with completion count.
   const childSteps = s.children || []
@@ -589,7 +592,7 @@ function ExecStepLine({ step: s, depth }: { step: any; depth: number }) {
   const [containerCollapsed, setContainerCollapsed] = useState(isContainer && childSteps.length > 3)
   const [showOutput, setShowOutput] = useState(false)
 
-  const completed = childSteps.filter((c: any) => c.status === 'success' || c.status === 'failed').length
+  const completed = childSteps.filter((c) => c.status === 'success' || c.status === 'failed').length
   const total = childSteps.length
 
   return (

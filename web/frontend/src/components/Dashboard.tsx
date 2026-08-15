@@ -36,8 +36,8 @@ export default function Dashboard() {
     try {
       const res = await workflowsApi.run(name)
       window.location.href = `/execution/${res.executionId}`
-    } catch (error: any) {
-      alert(`${t('editor.runFailed')}: ${error.message}`)
+    } catch (error) {
+      alert(`${t('editor.runFailed')}: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setRunning((prev) => ({ ...prev, [name]: false }))
     }
@@ -48,8 +48,8 @@ export default function Dashboard() {
     try {
       await workflowsApi.delete(name)
       loadData()
-    } catch (error: any) {
-      alert(`${t('common.delete')} ${t('common.failed')}: ${error.message}`)
+    } catch (error) {
+      alert(`${t('common.delete')} ${t('common.failed')}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 

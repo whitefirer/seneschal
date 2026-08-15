@@ -1,8 +1,8 @@
 // 容器分组框：condition 的 then/else、parallel 的 steps、foreach 的 do
 import { memo } from 'react'
-import { GitBranch, Layers, Repeat } from 'lucide-react'
+import { GitBranch, Layers, Repeat, type LucideIcon } from 'lucide-react'
 
-const kindStyle: Record<string, { color: string; Icon: any; label: string }> = {
+const kindStyle: Record<string, { color: string; Icon: LucideIcon; label: string }> = {
   condition: { color: '#f59e0b', Icon: GitBranch, label: 'condition' },
   parallel: { color: '#a78bfa', Icon: Layers, label: 'parallel' },
   foreach: { color: '#22d3ee', Icon: Repeat, label: 'loop' },

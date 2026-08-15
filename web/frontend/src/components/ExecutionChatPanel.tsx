@@ -45,19 +45,19 @@ export function ExecutionChatPanel({ executionId }: { executionId: string }) {
         if (event.type === 'token') {
           setMessages((prev) => {
             const next = [...prev]
-            next[next.length - 1] = { role: 'assistant', content: (event as any).text || '', thinking: false }
+            next[next.length - 1] = { role: 'assistant', content: event.text || '', thinking: false }
             return next
           })
         } else if (event.type === 'error') {
           setMessages((prev) => {
             const next = [...prev]
-            next[next.length - 1] = { role: 'assistant', content: `出错了：${(event as any).error}` }
+            next[next.length - 1] = { role: 'assistant', content: `出错了：${event.error || ''}` }
             return next
           })
         }
       }, ac.signal)
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
+    } catch (err) {
+      if (err instanceof Error && err.name !== 'AbortError') {
         setMessages((prev) => {
           const next = [...prev]
           next[next.length - 1] = { role: 'assistant', content: `请求失败：${err.message}` }

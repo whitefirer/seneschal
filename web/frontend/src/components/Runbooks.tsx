@@ -95,8 +95,8 @@ export default function Runbooks() {
       setShowForm(false)
       setNotice(null)
       await load()
-    } catch (error: any) {
-      setNotice({ ok: false, text: `Save failed: ${error.message}` })
+    } catch (error) {
+      setNotice({ ok: false, text: `Save failed: ${error instanceof Error ? error.message : String(error)}` })
     } finally {
       setSaving(false)
     }
@@ -108,8 +108,8 @@ export default function Runbooks() {
     try {
       const res = await runbooksApi.trigger(rb.Name)
       setNotice({ ok: true, text: `Triggered "${rb.Name}" → execution ${res.executionId}` })
-    } catch (error: any) {
-      setNotice({ ok: false, text: `Trigger failed: ${error.message}` })
+    } catch (error) {
+      setNotice({ ok: false, text: `Trigger failed: ${error instanceof Error ? error.message : String(error)}` })
     } finally {
       setTriggering(null)
     }
@@ -120,8 +120,8 @@ export default function Runbooks() {
     try {
       await runbooksApi.delete(rb.FileName || rb.Name + '.yaml')
       await load()
-    } catch (error: any) {
-      setNotice({ ok: false, text: `Delete failed: ${error.message}` })
+    } catch (error) {
+      setNotice({ ok: false, text: `Delete failed: ${error instanceof Error ? error.message : String(error)}` })
     }
   }
 

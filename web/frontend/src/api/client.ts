@@ -192,6 +192,7 @@ export interface ChatSelection {
   // (***) in the card; the real values in `variables` are still what /run
   // executes on confirm, so they must not be altered.
   sensitiveKeys?: string[]
+  executionId?: string      // set after /run returns, for inline progress polling
   confidence: number
   steps?: ChatStep[]
   available?: string[]
@@ -203,7 +204,16 @@ export interface ChatSSEEvent {
   // /api/executions/{id}/ask (thinking/token/done/error). Kept as string so
   // new event types don't require a type change.
   type: string
-  [key: string]: any
+  content?: string
+  text?: string
+  error?: string
+  tool?: string
+  input?: string
+  output?: string
+  selection?: unknown
+  yaml?: string
+  executionId?: string
+  [key: string]: unknown
 }
 
 export const chatApi = {

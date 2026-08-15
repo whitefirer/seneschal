@@ -3,13 +3,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   ReactFlow, Background, Controls, MiniMap, BackgroundVariant,
-  Connection, Edge, Node, MarkerType, useEdgesState,
+  Connection, Edge, Node, MarkerType, useEdgesState, type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Plus, Save, Play, GitGraph } from 'lucide-react'
 import StepNode, { type StepNodeHandlers } from './StepNode'
 import GroupNode from './GroupNode'
 import { stepsToGraph, graphToSteps, inferLinearEdges, type StepGraphNode, type StepGraphEdge } from '@/lib/stepGraph'
+import type { WorkflowStep } from '@/lib/yamlUtils'
 import { actionDef } from '@/lib/stepSchema'
 
 const nodeTypes = { step: StepNode, group: GroupNode }
@@ -19,12 +20,12 @@ let nodeSeq = 0
 const nextId = () => 'g' + nodeSeq++
 
 interface GraphEditorProps {
-  initialSteps: any[]
-  onSave: (steps: any[]) => void
-  onRun: (steps: any[]) => void
+  initialSteps: WorkflowStep[]
+  onSave: (steps: WorkflowStep[]) => void
+  onRun: (steps: WorkflowStep[]) => void
 }
 
-function makeNode(data: Record<string, any>, parentId?: string, branchType?: string, branchIndex?: number): StepGraphNode {
+function makeNode(data: WorkflowStep, parentId?: string, branchType?: string, branchIndex?: number): StepGraphNode {
   return {
     id: nextId(),
     data: {
@@ -40,7 +41,8 @@ function makeNode(data: Record<string, any>, parentId?: string, branchType?: str
 
 // 估算节点高度（用于布局，避免重叠）
 function estimateHeight(n: StepGraphNode): number {
-  const def = actionDef(n.data.action)
+  const action = typeof n.data.action === 'string' ? n.data.action : 'log'
+  const def = actionDef(action)
   const nFields = def?.fields.length || 0
   let h = 132 // 头部 + action 下拉 + 后续节点按钮 + 高级 + padding
   h += nFields * 46
@@ -71,8 +73,10 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
     const src = rawNodes.find((n) => n.id === e.source)
     const tgt = rawNodes.find((n) => n.id === e.target)
     if (src && tgt) {
-      const outputVar = src.data.save_output || src.data.output_var
-      upstreamMap.get(tgt.id)!.push({ name: src.data.name, outputVar })
+      const srcName = typeof src.data.name === 'string' ? src.data.name : ''
+      const saveOutput = typeof src.data.save_output === 'string' ? src.data.save_output : ''
+      const outputVar = saveOutput || (typeof src.data.output_var === 'string' ? src.data.output_var : '')
+      upstreamMap.get(tgt.id)!.push({ name: srcName, outputVar: outputVar || undefined })
     }
   }
 
@@ -102,14 +106,15 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
 
   const handled = new Set<string>()
   for (const top of tops) {
-    const branches = CONTAINER_BRANCHES[top.data.action]
+    const action = typeof top.data.action === 'string' ? top.data.action : 'log'
+    const branches = CONTAINER_BRANCHES[action]
     if (!branches) continue
     const base = topPos.get(top.id)!
     let gy = base.y
     for (const branch of branches) {
       const children = rawNodes
         .filter((n) => n.data.__parentId === top.id && n.data.__branchType === branch)
-        .sort((a, b) => (a.data.__branchIndex ?? 0) - (b.data.__branchIndex ?? 0))
+        .sort((a, b) => Number(a.data.__branchIndex ?? 0) - Number(b.data.__branchIndex ?? 0))
       if (!children.length) continue
       const groupId = top.id + '::' + branch
       const pad = 16, headerH = 30, gap = 16, cw = 240
@@ -154,7 +159,7 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
 export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditorProps) {
   const [rawNodes, setRawNodes] = useState<StepGraphNode[]>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
-  const rfInstance = useRef<any>(null)
+  const rfInstance = useRef<ReactFlowInstance | null>(null)
 
   // 初始化
   useEffect(() => {

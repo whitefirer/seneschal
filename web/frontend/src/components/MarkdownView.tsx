@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -21,7 +22,7 @@ export function MarkdownView({ content }: { content: string }) {
           ul: ({ children }) => <ul className="list-disc pl-5 mb-2 space-y-0.5">{children}</ul>,
           ol: ({ children }) => <ol className="list-decimal pl-5 mb-2 space-y-0.5">{children}</ol>,
           li: ({ children }) => <li className="text-foreground">{children}</li>,
-          code: ({ inline, children }: any) =>
+          code: ({ inline, children }: { inline?: boolean; children?: ReactNode }) =>
             inline ? (
               <code className="px-1 py-0.5 rounded bg-muted text-foreground text-xs font-mono">{children}</code>
             ) : (

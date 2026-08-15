@@ -6,9 +6,13 @@ import { Save, Play, Trash2, ArrowLeft, Check, Eye, Code2 } from 'lucide-react'
 import { workflowsApi } from '@/api/client'
 import { useThemeStore } from '@/store/themeStore'
 import GraphEditor from '@/components/GraphEditor'
-import { workflowToYaml, yamlToWorkflow } from '@/lib/yamlUtils'
+import { workflowToYaml, yamlToWorkflow, type WorkflowStep } from '@/lib/yamlUtils'
 import { registerMonacoThemes } from '@/lib/monacoThemes'
 import '@/lib/monacoSetup'
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 export default function Editor() {
   const { t } = useTranslation()
@@ -60,8 +64,8 @@ steps:
       const wf = await workflowsApi.get(name!)
       setContent(wf.content)
       setFileName(wf.fileName)
-    } catch (error: any) {
-      alert(`${t('editor.loadFailed')}: ${error.message}`)
+    } catch (error) {
+      alert(`${t('editor.loadFailed')}: ${errorMessage(error)}`)
       navigate('/')
     } finally {
       setLoading(false)
@@ -81,9 +85,9 @@ steps:
       if (isNew) {
         navigate(`/editor/${saveName}`)
       }
-    } catch (error: any) {
+    } catch (error) {
       // 显示详细错误信息
-      let errorMsg = error.message || 'Save failed'
+      let errorMsg = errorMessage(error) || 'Save failed'
       
       // 尝试解析后端返回的详细错误（YAML 解析错误等）
       try {
@@ -118,9 +122,9 @@ steps:
       const saveName = fileName.replace('.yaml', '').replace('.yml', '')
       const res = await workflowsApi.run(saveName)
       navigate(`/execution/${res.executionId}`)
-    } catch (error: any) {
+    } catch (error) {
       // 显示详细错误信息
-      let errorMsg = error.message || t('editor.runFailedError')
+      let errorMsg = errorMessage(error) || t('editor.runFailedError')
       
       // 尝试解析后端返回的详细错误
       try {
@@ -151,9 +155,9 @@ steps:
       const result = await workflowsApi.validate(saveName)
       alert(`✅ ${t('editor.validWorkflow')}\n\n${t('editor.steps')}: ${result.steps}\n${t('editor.variables')}: ${result.variables}`)
       setValidationError(null)
-    } catch (error: any) {
+    } catch (error) {
       // 显示详细验证错误
-      let errorMsg = error.message || t('editor.invalidWorkflow')
+      let errorMsg = errorMessage(error) || t('editor.invalidWorkflow')
       
       // 尝试解析后端返回的详细错误
       try {
@@ -181,8 +185,8 @@ steps:
     try {
       await workflowsApi.delete(fileName)
       navigate('/')
-    } catch (error: any) {
-      alert(`Failed to delete: ${error.message}`)
+    } catch (error) {
+      alert(`Failed to delete: ${errorMessage(error)}`)
     }
   }
 
@@ -210,7 +214,7 @@ steps:
   }, [])
 
   // Graph editor functions
-  const handleGraphSave = useCallback((steps: any[]) => {
+  const handleGraphSave = useCallback((steps: WorkflowStep[]) => {
     try {
       const workflow = yamlToWorkflow(content)
       workflow.steps = steps
@@ -218,9 +222,9 @@ steps:
       setContent(newYaml)
       setMode('yaml')
       setTimeout(() => saveWorkflow(), 100)
-    } catch (error: any) {
+    } catch (error) {
       // 显示详细错误信息
-      let errorMsg = error.message || 'Failed to save graph'
+      let errorMsg = errorMessage(error) || 'Failed to save graph'
       
       // 尝试解析错误中的节点信息
       try {
@@ -239,7 +243,7 @@ steps:
     }
   }, [content, saveWorkflow])
 
-  const handleGraphRun = useCallback((steps: any[]) => {
+  const handleGraphRun = useCallback((steps: WorkflowStep[]) => {
     try {
       const workflow = yamlToWorkflow(content)
       workflow.steps = steps
@@ -247,9 +251,9 @@ steps:
       setContent(newYaml)
       setMode('yaml')
       setTimeout(() => runWorkflow(), 100)
-    } catch (error: any) {
+    } catch (error) {
       // 显示详细错误信息
-      let errorMsg = error.message || 'Failed to run from graph'
+      let errorMsg = errorMessage(error) || 'Failed to run from graph'
       
       // 尝试解析错误中的节点信息
       try {

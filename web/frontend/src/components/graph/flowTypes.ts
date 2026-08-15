@@ -25,7 +25,7 @@ export interface FlowStep {
   collapsed?: boolean
   position?: { x: number; y: number }
   // foreach 特有字段
-  items?: any[]
+  items?: unknown[]
   itemVar?: string
   _originalChildrenCount?: number  // 原始子节点数量（用于判断是否有省略）
   _skippedCount?: number           // 省略的子节点数量
@@ -64,7 +64,7 @@ export interface NodeData {
   isCollapsed: boolean
   onToggleCollapse?: (nodeId: string) => void
   // foreach 特有
-  items?: any[]
+  items?: unknown[]
   itemVar?: string
   // condition 特有（FlowStep 透传字段）
   expression?: string

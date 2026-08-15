@@ -4,10 +4,11 @@
 // 转换层只负责：容器子节点（then/else/steps/do）与 next/depends_on 的扁平化/重组。
 // 因此任意新增字段天然 round-trip，不会丢数据。
 import { CONTAINER_CHILDREN } from './stepSchema'
+import type { WorkflowStep } from './yamlUtils'
 
 export interface StepGraphNode {
   id: string
-  data: Record<string, any>
+  data: Record<string, unknown>
   position?: { x: number; y: number }
 }
 
@@ -34,32 +35,39 @@ function nodeIdOf(counter: { n: number }): string {
   return 'n' + counter.n++
 }
 
+function metaNumber(node: StepGraphNode): number {
+  const v = node.data[META_INDEX]
+  return typeof v === 'number' ? v : 0
+}
+
 /**
  * step 数组 → 图（扁平化：容器子节点成为独立节点，next/depends_on 成为边）
  */
-export function stepsToGraph(steps: any[]): { nodes: StepGraphNode[]; edges: StepGraphEdge[] } {
+export function stepsToGraph(steps: WorkflowStep[]): { nodes: StepGraphNode[]; edges: StepGraphEdge[] } {
   const nodes: StepGraphNode[] = []
   const edges: StepGraphEdge[] = []
   const nameToId = new Map<string, string>()
   const counter = { n: 0 }
   const pendingEdges: { nodeId: string; nexts: string[]; deps: string[] }[] = []
 
-  const walk = (list: any[], parentId?: string, branchType?: string) => {
+  const walk = (list: WorkflowStep[] | undefined, parentId?: string, branchType?: string) => {
     ;(list || []).forEach((step, i) => {
       if (!step || typeof step !== 'object') return
-      const name = step.name || 'step-' + (i + 1)
+      const name = typeof step.name === 'string' ? step.name : 'step-' + (i + 1)
       const id = nodeIdOf(counter)
       if (name && !nameToId.has(name)) nameToId.set(name, id)
-      if (step.id && !nameToId.has(step.id)) nameToId.set(step.id, id)
+      if (typeof step.id === 'string' && step.id && !nameToId.has(step.id)) nameToId.set(step.id, id)
 
       // 透传：复制 step 全部字段，删掉容器子节点与 DAG 字段（由边/子节点表达）
-      const data: Record<string, any> = { ...step }
+      const data: Record<string, unknown> = { ...step }
       delete data.then
       delete data.else
       delete data.steps
       delete data.do
-      const nexts = Array.isArray(data.next) ? data.next.filter((x: any) => typeof x === 'string') : []
-      const deps = Array.isArray(data.depends_on) ? data.depends_on.filter((x: any) => typeof x === 'string') : []
+      const rawNext = data.next
+      const rawDeps = data.depends_on
+      const nexts = Array.isArray(rawNext) ? rawNext.filter((x): x is string => typeof x === 'string') : []
+      const deps = Array.isArray(rawDeps) ? rawDeps.filter((x): x is string => typeof x === 'string') : []
       delete data.next
       delete data.depends_on
 
@@ -109,7 +117,7 @@ export function stepsToGraph(steps: any[]): { nodes: StepGraphNode[]; edges: Ste
 /**
  * 图 → step 数组（重组容器嵌套 + 拓扑排序顶层 + 写回 next/depends_on）
  */
-export function graphToSteps(nodes: StepGraphNode[], edges: StepGraphEdge[]): any[] {
+export function graphToSteps(nodes: StepGraphNode[], edges: StepGraphEdge[]): WorkflowStep[] {
   const idToNode = new Map(nodes.map((n) => [n.id, n]))
   const nextMap = new Map<string, string[]>() // source -> targets
   const depMap = new Map<string, string[]>() // target -> sources
@@ -121,10 +129,16 @@ export function graphToSteps(nodes: StepGraphNode[], edges: StepGraphEdge[]): an
     if (!depMap.get(e.target)!.includes(e.source)) depMap.get(e.target)!.push(e.source)
   }
 
-  const build = (nodeId: string): any => {
+  const childrenOf = (parentId: string, branchType: string): WorkflowStep[] =>
+    nodes
+      .filter((n) => n.data[META_PARENT] === parentId && n.data[META_BRANCH] === branchType)
+      .sort((a, b) => metaNumber(a) - metaNumber(b))
+      .map((n) => build(n.id))
+
+  const build = (nodeId: string): WorkflowStep => {
     const node = idToNode.get(nodeId)
     if (!node) return { name: 'step', action: 'log' }
-    const step: Record<string, any> = {}
+    const step: WorkflowStep = {}
     for (const [k, v] of Object.entries(node.data)) {
       if (k.startsWith('__')) continue // 跳过元数据
       step[k] = v
@@ -134,8 +148,18 @@ export function graphToSteps(nodes: StepGraphNode[], edges: StepGraphEdge[]): an
 
     const nexts = nextMap.get(nodeId)
     const deps = depMap.get(nodeId)
-    if (nexts && nexts.length) step.next = nexts.map((id) => idToNode.get(id)?.data?.name || id)
-    if (deps && deps.length) step.depends_on = deps.map((id) => idToNode.get(id)?.data?.name || id)
+    if (nexts && nexts.length) {
+      step.next = nexts.map((id) => {
+        const name = idToNode.get(id)?.data?.name
+        return typeof name === 'string' ? name : id
+      })
+    }
+    if (deps && deps.length) {
+      step.depends_on = deps.map((id) => {
+        const name = idToNode.get(id)?.data?.name
+        return typeof name === 'string' ? name : id
+      })
+    }
 
     const action = step.action
     if (action === 'condition') {
@@ -152,12 +176,6 @@ export function graphToSteps(nodes: StepGraphNode[], edges: StepGraphEdge[]): an
     }
     return step
   }
-
-  const childrenOf = (parentId: string, branchType: string): any[] =>
-    nodes
-      .filter((n) => n.data[META_PARENT] === parentId && n.data[META_BRANCH] === branchType)
-      .sort((a, b) => (a.data[META_INDEX] ?? 0) - (b.data[META_INDEX] ?? 0))
-      .map((n) => build(n.id))
 
   const roots = nodes.filter((n) => !n.data[META_PARENT])
   const ordered = topologicalSort(roots, depMap)
@@ -185,13 +203,12 @@ function topologicalSort(roots: StepGraphNode[], depMap: Map<string, string[]>):
     }
   }
 
-  const byIndex = (a: StepGraphNode, b: StepGraphNode) =>
-    (a.data[META_INDEX] ?? 0) - (b.data[META_INDEX] ?? 0)
+  const byIndex = (a: StepGraphNode, b: StepGraphNode) => metaNumber(a) - metaNumber(b)
 
   // 初始 ready = 入度 0 的节点，按 index 排序
   const ready = roots.filter((n) => (inDegree.get(n.id) || 0) === 0).sort(byIndex).map((n) => n.id)
   const result: string[] = []
-  const idx = new Map<string, number>(roots.map((n) => [n.id, n.data[META_INDEX] ?? 0]))
+  const idx = new Map<string, number>(roots.map((n) => [n.id, metaNumber(n)]))
 
   while (ready.length > 0) {
     // 稳定地取 index 最小的 ready 节点
@@ -216,13 +233,13 @@ export function inferLinearEdges(nodes: StepGraphNode[], edges: StepGraphEdge[])
   const result: StepGraphEdge[] = [...edges]
   const groups = new Map<string, StepGraphNode[]>()
   for (const n of nodes) {
-    const key = (n.data[META_PARENT] ?? '') + '::' + (n.data[META_BRANCH] ?? '')
+    const key = String(n.data[META_PARENT] ?? '') + '::' + String(n.data[META_BRANCH] ?? '')
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(n)
   }
   for (const group of groups.values()) {
-    if (group[0]?.data[META_BRANCH] === 'parallel') continue
-    group.sort((a, b) => (a.data[META_INDEX] ?? 0) - (b.data[META_INDEX] ?? 0))
+    if (String(group[0]?.data[META_BRANCH] ?? '') === 'parallel') continue
+    group.sort((a, b) => metaNumber(a) - metaNumber(b))
     for (let i = 0; i < group.length - 1; i++) {
       const cur = group[i]
       const nxt = group[i + 1]
