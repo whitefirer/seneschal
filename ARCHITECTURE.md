@@ -139,19 +139,25 @@ type WorkflowResult struct {
 
 ## Action dispatch
 
-`executeStep`(`executor.go:677`)按 `step.Action` switch:
+action 由 `workflow/action.go` 的注册表驱动,不再硬编码 switch。每个 action 是一个 `ActionSpec`(`Name` / `IsContainer` / `SideEffecting` / `Nondeterministic` / `Run` / `Validate` / `CommandForError`),内置 action 在包 `init` 时注册。`executeStep` 按 `step.Action` 查表调用 `spec.Run`;校验走 `spec.Validate`(`ValidateStep` 查表);副作用/确定性标记由 `spec.SideEffecting`/`spec.Nondeterministic` 统一填入(替代原先散落两处的 switch)。
+
+> **扩展机制**:外部包(如 cenacle)无需 fork seneschal,只需在自身 `init` 里 `workflow.RegisterAction(ActionSpec{...})` 即可新增自定义 action(如 `agent`)。handler 通过 `e.GetContext().Set/Get` 读写变量、`e.OnProgress(...)` 发事件;校验/副作用/on_error 命令提取均由注册表覆盖。示例见 `workflow/action_registry_test.go`。
+
+内置 action:
 
 | action | 实现文件 | 备注 |
 |---|---|---|
 | `shell` | `executor_shell.go` | `exec.CommandContext`,OS 感知 shell 选择,合并 `os.Environ()` |
 | `http` | `executor_http.go` | per-step timeout(默认 60s),结构化存 `{status,body,headers}` |
-| `condition` | `executor_condition.go` | expr-lang 求值,失败回退 legacy 字符串比较 |
-| `parallel` | `executor_parallel.go` | 每子步一 goroutine + WaitGroup + mutex |
-| `foreach` | `executor_foreach.go` | `parseItems` 支持字符串/列表/变量;每轮建子 DAG |
+| `condition` | `executor_condition.go` | 容器;expr-lang 求值,失败回退 legacy 字符串比较 |
+| `parallel` | `executor_foreach.go`(`executeContainerDAG`) | 容器;子步 wave 并发 |
+| `foreach`/`loop` | `executor_foreach.go` | 容器;`parseItems` 支持字符串/列表/变量;每轮建子 DAG;`loop` 是 `foreach` 别名 |
 | `set`/`sleep`/`log`/`template` | `executor_actions.go` | 简单 |
-| `ai`/`ai_decide` | _(Phase 2)_ | 见下文"AI 集成架构" |
+| `script` | `executor_script.go` | 内嵌代码(python/node/...),变量经 stdin JSON |
+| `workflow` | `executor_workflow.go` | 子工作流调用 |
+| `ai`/`ai_decide` | `executor_ai.go` | 见下文"AI 集成架构" |
 
-> ✅ 已统一:`condition` 旧的顶层直发路径 `execCondition` 已随 executeStep 容器 dispatch 分支一并删除(2023 年初版 executor 的残留),现仅 `executeContainerDAG` 一条路径。
+> ✅ 已统一:`condition` 旧的顶层直发路径 `execCondition` 已删除;action dispatch / 校验 / 副作用标记 / on_error 命令提取现均走 `ActionSpec` 注册表(2026-08 起)。
 
 ## 输出体系
 

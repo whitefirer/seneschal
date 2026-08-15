@@ -143,65 +143,17 @@ func ValidateStep(step Step, index int) []error {
 	if step.Name == "" {
 		errs = append(errs, fmt.Errorf("step[%d]: name is required", index))
 	}
-	switch step.Action {
-	case "":
+	if step.Action == "" {
 		errs = append(errs, fmt.Errorf("step[%d] (%s): action is required", index, step.Name))
-	case "shell":
-		if step.Command == "" && step.Shell == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): shell action requires 'command' or 'shell'", index, step.Name))
-		}
-	case "http":
-		if step.URL == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): http action requires 'url'", index, step.Name))
-		}
-	case "condition":
-		if step.Expression == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): condition action requires 'expression'", index, step.Name))
-		}
-	case "set":
-		// value can reference other vars, so empty is ok for pure deletion
-	case "sleep":
-		if step.Duration == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): sleep action requires 'duration'", index, step.Name))
-		}
-	case "log":
-		// message is optional, level defaults to info
-	case "parallel":
-		for j, sub := range step.Steps {
-			subErrs := ValidateStep(sub, j)
-			for _, e := range subErrs {
-				errs = append(errs, fmt.Errorf("step[%d] (%s) parallel[%d]: %v", index, step.Name, j, e))
-			}
-		}
-	case "template":
-		if step.Source == "" || step.Output == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): template action requires 'source' and 'output'", index, step.Name))
-		}
-	case "foreach":
-		if step.Do == nil || len(step.Do) == 0 {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): foreach action requires 'do' steps", index, step.Name))
-		}
-	case "ai":
-		if step.Prompt == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): ai action requires 'prompt'", index, step.Name))
-		}
-	case "script":
-		if step.Lang == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): script action requires 'lang' (e.g. python, node)", index, step.Name))
-		}
-		if step.Code == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): script action requires 'code'", index, step.Name))
-		}
-	case "workflow":
-		if step.Source == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): workflow action requires 'source' (path to sub-workflow YAML)", index, step.Name))
-		}
-	case "ai_decide":
-		if step.Question == "" {
-			errs = append(errs, fmt.Errorf("step[%d] (%s): ai_decide action requires 'question'", index, step.Name))
-		}
-	default:
+		return errs
+	}
+	spec, ok := LookupAction(step.Action)
+	if !ok {
 		errs = append(errs, fmt.Errorf("step[%d] (%s): unknown action '%s'", index, step.Name, step.Action))
+		return errs
+	}
+	if spec.Validate != nil {
+		errs = append(errs, spec.Validate(step, index)...)
 	}
 	return errs
 }

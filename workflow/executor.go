@@ -743,17 +743,6 @@ func (e *Executor) topologicalSort(graph map[string]*DAGNode) ([]string, error) 
 	return result, nil
 }
 
-// isContainerAction reports whether the action is a container (condition,
-// parallel, foreach, loop) whose children are scheduled as a sub-DAG via
-// executeContainerDAG rather than dispatched through executeStep.
-func isContainerAction(action string) bool {
-	switch action {
-	case "condition", "parallel", "foreach", "loop":
-		return true
-	}
-	return false
-}
-
 // waveConfig parameterizes one DAG wave schedule (runWaves). The three call
 // sites — top-level executeDAG, executeContainerDAG (condition/parallel
 // children), and executeForeach (per-iteration do-steps) — share the same
@@ -1089,9 +1078,9 @@ func (e *Executor) executeStepOnce(step Step, depth int, wfResult *WorkflowResul
 		e.incReplayMiss()
 	}
 
+	spec, registered := LookupAction(step.Action)
+
 	var err error
-	var output string
-	var children []StepResult
 
 	// Step-level retry: repeat the dispatch up to step.Retry+1 times on
 	// failure. Only the dispatch is retried — save_output / context.Set happen
@@ -1125,60 +1114,23 @@ errorRecovery:
 		// Inner: Phase 6 blind retry loop.
 	attemptLoop:
 		for attempt := 0; attempt < maxAttempts; attempt++ {
-			// Reset per-attempt state.
-			output = ""
-			children = nil
+			// Reset per-attempt transient fields the handler populates.
+			result.Output = ""
+			result.Children = nil
+			result.ConditionResult = nil
+			result.InputTokens = 0
+			result.OutputTokens = 0
 			err = nil
 
-			switch step.Action {
-			case "shell":
-				output, err = e.execShell(step)
-				if step.Command != "" {
-					result.ShellCommand = step.Command
-				} else {
-					result.ShellCommand = step.Shell
-				}
-			case "http":
-				output, err = e.execHTTP(step)
-				result.HTTPUrl = step.URL
-				result.HTTPMethod = step.Method
-			case "set":
-				output, err = e.execSet(step)
-			case "sleep":
-				output, err = e.execSleep(step)
-				result.SleepDuration = step.Duration
-			case "log":
-				output = e.execLog(step)
-				result.LogMessage = step.Message
-			case "template":
-				output, err = e.execTemplate(step)
-			case "ai":
-				var inTok, outTok int
-				output, inTok, outTok, err = e.execAI(step, stepID, depth, parentID)
-				// Token counts travel with the return value — parallel AI
-				// steps each get their own counts, not a shared slot's.
-				result.InputTokens = inTok
-				result.OutputTokens = outTok
-				result.Nondeterministic = true
-			case "ai_decide":
-				decided, inTok, outTok, derr := e.execAIDecide(step, stepID, depth, parentID)
-				result.InputTokens = inTok
-				result.OutputTokens = outTok
-				if derr != nil {
-					err = derr
-				} else {
-					result.ConditionResult = &decided
-					output = fmt.Sprintf("decided: %v", decided)
-				}
-				result.Nondeterministic = true
-			case "script":
-				output, err = e.execScript(step)
-				result.SideEffecting = true
-			case "workflow":
-				output, children, err = e.execWorkflow(step)
-				result.SideEffecting = true
-			default:
+			switch {
+			case !registered:
 				err = fmt.Errorf("unknown action: %s", step.Action)
+			case spec.IsContainer:
+				err = fmt.Errorf("container action %q reached plain dispatch (should route through executeContainerDAG)", step.Action)
+			case spec.Run == nil:
+				err = fmt.Errorf("action %q has no run handler", step.Action)
+			default:
+				err = spec.Run(e, step, &result, stepID, depth, parentID)
 			}
 
 			if err == nil {
@@ -1207,7 +1159,7 @@ errorRecovery:
 				StepName:     step.Name,
 				Action:       step.Action,
 				Command:      e.stepCommandForError(step),
-				Output:       output,
+				Output:       result.Output,
 				Error:        err.Error(),
 				CustomPrompt: step.OnErrorPrompt,
 			}
@@ -1232,7 +1184,8 @@ errorRecovery:
 			case decision.Action == "skip" && mode == "auto":
 				result.Status = "skipped"
 				result.Error = fmt.Sprintf("skipped (AI: %s)", decision.Reason)
-				result.Children = children
+				// Partial output is not surfaced for skipped steps.
+				result.Output = ""
 				result.EndTime = Now()
 				e.sendEvent("step_complete", step.Name, stepID, step.Action, "skipped", "", "", depth, parentID, nil)
 				return result, HookResult{}
@@ -1248,18 +1201,13 @@ errorRecovery:
 		break errorRecovery
 	} // end errorRecovery
 
-	// Set children (currently only the workflow action produces child results;
-	// container actions never reach this dispatch — the wave schedulers route
-	// them to executeContainerDAG).
-	result.Children = children
-
-	// 填充确定性标记初值(见 docs/PRODUCT.md 的"三种确定性层级")
-	// (AI token counts were already recorded on the result by the dispatch
-	// above — they travel with the execAI/execAIDecide return values.)
-	switch step.Action {
-	case "shell", "http", "template":
+	// Determinism metadata comes from the registered action spec (applied once
+	// after the handler ran), not a per-call switch. The workflow action's child
+	// results were already written to result.Children by its handler.
+	if spec.SideEffecting {
 		result.SideEffecting = true
-	case "ai", "ai_decide":
+	}
+	if spec.Nondeterministic {
 		result.Nondeterministic = true
 	}
 
@@ -1278,15 +1226,16 @@ errorRecovery:
 	if err != nil {
 		result.Status = "failed"
 		result.Error = err.Error()
-		// http 失败(非 2xx)时响应体已在 output 中,保留到结果里便于排查
-		if step.Action == "http" && output != "" {
-			result.Output = output
+		// http 失败(非 2xx)时响应体已由 handler 写入 result.Output,保留到
+		// 结果里便于排查;其余 action 的失败输出不保留(与历史行为一致)。
+		if step.Action != "http" {
+			result.Output = ""
 		}
 		e.printer.PrintStepResult(step.Name, StatusFailed, err.Error(), result.Duration, depth)
 	} else {
 		result.Status = "success"
-		result.Output = output
-		e.printer.PrintStepResult(step.Name, StatusSuccess, output, result.Duration, depth)
+		// result.Output 已由 handler 写入。
+		e.printer.PrintStepResult(step.Name, StatusSuccess, result.Output, result.Duration, depth)
 	}
 
 	// Fire step callback for streaming (after status is set)
@@ -1347,23 +1296,10 @@ func (e *Executor) errorAnalysisMode(step Step) string {
 
 // stepCommandForError extracts the relevant command for the error prompt.
 func (e *Executor) stepCommandForError(step Step) string {
-	switch step.Action {
-	case "shell":
-		if step.Command != "" {
-			return step.Command
-		}
-		return step.Shell
-	case "http":
-		return step.URL
-	case "ai":
-		return step.Prompt
-	case "ai_decide":
-		return step.Question
-	case "script":
-		return step.Code
-	default:
-		return ""
+	if spec, ok := LookupAction(step.Action); ok && spec.CommandForError != nil {
+		return spec.CommandForError(step)
 	}
+	return ""
 }
 
 // fireStepHooks fires after_step hooks for a completed step. Both step-level
