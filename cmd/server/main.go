@@ -160,6 +160,15 @@ func main() {
 			path = "index.html"
 		}
 
+		// Cache policy: hashed assets are immutable; the HTML shell (and the
+		// SPA fallback) must revalidate so a rebuilt server is picked up on
+		// the next refresh instead of serving a stale cached shell.
+		if strings.HasPrefix(path, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
+
 		_, err := staticFS.Open(path)
 		if err != nil {
 			indexData, readErr := fs.ReadFile(staticFS, "index.html")
