@@ -137,6 +137,13 @@ const StepNode = memo(function StepNode({ id, data, selected }: { id: string; da
 
   const patch = (k: string, v: any) => h?.onChange(id, { [k]: v })
 
+  // 引用上游：点击 chip 把 {{.ref}} 追加到 prompt/question
+  const insertRef = (u: { name: string; outputVar?: string }) => {
+    const ref = u.outputVar || u.name
+    const key = data.action === 'ai_decide' ? 'question' : 'prompt'
+    patch(key, ((data[key] || '') + ' {{.' + ref + '}}').trim())
+  }
+
   return (
     <div
       className="rounded-lg border-2 bg-card shadow-sm text-left"
@@ -165,6 +172,19 @@ const StepNode = memo(function StepNode({ id, data, selected }: { id: string; da
           className="w-full px-1 py-1 text-xs border rounded bg-background">
           {ACTION_DEFS.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
         </select>
+
+        {/* 引用上游（AI 节点：点击 chip 插入 {{.ref}}） */}
+        {(data.action === 'ai' || data.action === 'ai_decide') && (data.__upstream?.length > 0) && (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">上游:</span>
+            {data.__upstream.map((u: any) => (
+              <button key={u.name} onClick={() => insertRef(u)} title={u.name}
+                className="px-1.5 py-0.5 text-[10px] border rounded hover:bg-accent font-mono text-muted-foreground">
+                {u.outputVar || u.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         {def?.fields.map((f) => (
           <div key={f.key}>

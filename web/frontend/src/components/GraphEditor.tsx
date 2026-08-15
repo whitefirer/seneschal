@@ -50,6 +50,18 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
   const tops = rawNodes.filter((n) => !n.data.__parentId)
   const topIds = new Set(tops.map((n) => n.id))
 
+  // 上游引用：每条边 source 的 name/save_output 供下游 AI 节点 @ 引用
+  const upstreamMap = new Map<string, { name: string; outputVar?: string }[]>()
+  rawNodes.forEach((n) => upstreamMap.set(n.id, []))
+  for (const e of edges) {
+    const src = rawNodes.find((n) => n.id === e.source)
+    const tgt = rawNodes.find((n) => n.id === e.target)
+    if (src && tgt) {
+      const outputVar = src.data.save_output || src.data.output_var
+      upstreamMap.get(tgt.id)!.push({ name: src.data.name, outputVar })
+    }
+  }
+
   // 顶层深度（只考虑顶层节点之间的边）
   const preds = new Map<string, string[]>(tops.map((n) => [n.id, []]))
   for (const e of edges) if (topIds.has(e.target)) preds.get(e.target)!.push(e.source)
@@ -98,19 +110,19 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
         nodes.push({
           id: c.id, type: 'step', parentId: groupId, extent: 'parent' as const,
           position: { x: pad, y: headerH + pad + i * (ch + gap) },
-          data: { ...c.data, __handlers: handlers },
+          data: { ...c.data, __handlers: handlers, __upstream: upstreamMap.get(c.id) || [] },
         })
       })
       gy += gh + 28
     }
-    nodes.push({ id: top.id, type: 'step', position: base, data: { ...top.data, __handlers: handlers } })
+    nodes.push({ id: top.id, type: 'step', position: base, data: { ...top.data, __handlers: handlers, __upstream: upstreamMap.get(top.id) || [] } })
     handled.add(top.id)
   }
 
   // 非容器顶层节点
   for (const top of tops) {
     if (handled.has(top.id)) continue
-    nodes.push({ id: top.id, type: 'step', position: topPos.get(top.id)!, data: { ...top.data, __handlers: handlers } })
+    nodes.push({ id: top.id, type: 'step', position: topPos.get(top.id)!, data: { ...top.data, __handlers: handlers, __upstream: upstreamMap.get(top.id) || [] } })
   }
 
   return nodes
