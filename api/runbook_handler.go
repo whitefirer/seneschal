@@ -280,6 +280,7 @@ func MakeTriggerCallback(store workflow.ExecutionStore, hub *WSHub, workflowsDir
 					ExecutionSummary: workflow.ExecutionSummary{
 						ID:           execID,
 						WorkflowName: wf.Name,
+						WorkflowFile: rb.Workflow,
 						Status:       result.Status,
 						StartTime:    result.StartTime,
 						EndTime:      result.EndTime,

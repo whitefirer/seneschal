@@ -9,14 +9,14 @@ const kindStyle: Record<string, { color: string; Icon: any; label: string }> = {
 }
 
 const GroupNode = memo(function GroupNode({ data }: {
-  data: { branch: string; kind: 'condition' | 'parallel' | 'foreach' }
+  data: { branch: string; kind: 'condition' | 'parallel' | 'foreach'; width?: number; height?: number }
 }) {
   const s = kindStyle[data.kind] || kindStyle.condition
   const Icon = s.Icon
   return (
     <div
-      className="w-full h-full rounded-xl border-2 border-dashed bg-muted/10"
-      style={{ borderColor: s.color }}
+      className="rounded-xl border-2 border-dashed bg-muted/10"
+      style={{ width: data.width, height: data.height, borderColor: s.color }}
     >
       <div
         className="absolute -top-3 left-3 px-2 py-0.5 rounded text-xs font-medium flex items-center gap-1"

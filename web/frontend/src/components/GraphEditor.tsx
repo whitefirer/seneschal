@@ -114,7 +114,8 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
       const groupId = top.id + '::' + branch
       const pad = 16, headerH = 30, gap = 16, cw = 240
       const gw = cw + pad * 2
-      // 子节点按估算高度堆叠
+      const gx = base.x + 340
+      // 子节点绝对位置（组内竖排）
       const childPos: { c: StepGraphNode; y: number }[] = []
       let yy = headerH + pad
       for (const c of children) {
@@ -122,15 +123,16 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
         yy += estimateHeight(c) + gap
       }
       const gh = yy + pad
+      // 分组框（zIndex -1 在子节点后方，绝对坐标）
       nodes.push({
-        id: groupId, type: 'group', position: { x: base.x + 340, y: gy },
-        width: gw, height: gh,
-        data: { branch, kind: top.data.action === 'condition' ? 'condition' : top.data.action === 'parallel' ? 'parallel' : 'foreach' },
+        id: groupId, type: 'group', position: { x: gx, y: gy },
+        data: { branch, kind: top.data.action === 'condition' ? 'condition' : top.data.action === 'parallel' ? 'parallel' : 'foreach', width: gw, height: gh },
+        zIndex: -1, draggable: false, selectable: false,
       })
       for (const { c, y } of childPos) {
         nodes.push({
-          id: c.id, type: 'step', parentId: groupId, extent: 'parent' as const,
-          position: { x: pad, y },
+          id: c.id, type: 'step',
+          position: { x: gx + pad, y: gy + y },
           data: { ...c.data, __handlers: handlers, __upstream: upstreamMap.get(c.id) || [] },
         })
       }
@@ -285,14 +287,19 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
               if (a === 'foreach' || a === 'loop') return '#22d3ee'
               if (a === 'ai' || a === 'ai_decide') return '#f472b6'
               if (a === 'log') return '#fde047'
+              if (a === 'set') return '#f97316'
+              if (a === 'sleep') return '#a3e635'
+              if (a === 'script') return '#fbbf24'
+              if (a === 'template') return '#34d399'
+              if (a === 'workflow') return '#38bdf8'
               return '#9ca3af'
             }}
             maskColor="rgba(0, 0, 0, 0.15)"
             pannable
             zoomable
             style={{
-              width: 160,
-              height: 120,
+              width: 200,
+              height: 150,
               background: 'rgba(255, 255, 255, 0.6)',
               backdropFilter: 'blur(4px)',
               borderRadius: '8px',
