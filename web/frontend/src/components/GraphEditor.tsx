@@ -5,6 +5,7 @@ import {
   ReactFlow, Background, Controls, MiniMap, BackgroundVariant,
   Connection, Edge, Node, MarkerType, useEdgesState,
 } from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 import { Plus, Save, Play, GitGraph } from 'lucide-react'
 import StepNode, { type StepNodeHandlers } from './StepNode'
 import GroupNode from './GroupNode'
