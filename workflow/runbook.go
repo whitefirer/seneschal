@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -264,25 +265,25 @@ func (m *RunbookManager) startAllCronsLocked() {
 				continue
 			}
 			key := fmt.Sprintf("%s#%d", name, i)
-			interval := parseSimpleCron(t.Cron)
-			if interval <= 0 {
-				m.logFunc("⚠️ runbook %s: invalid cron %q", name, t.Cron)
+			schedule, err := parseCron(t.Cron)
+			if err != nil {
+				m.logFunc("⚠️ runbook %s: invalid cron %q: %v", name, t.Cron, err)
 				continue
 			}
 			stopCh := make(chan struct{})
 			m.cronStop[key] = stopCh
-			go m.runCron(key, rb, interval, stopCh)
-			m.logFunc("⏰ runbook %s: cron %q (every %s)", name, t.Cron, interval)
+			go m.runCron(key, rb, schedule, stopCh)
+			m.logFunc("⏰ runbook %s: cron %q", name, t.Cron)
 		}
 	}
 }
 
-func (m *RunbookManager) runCron(key string, rb *RunbookConfig, interval time.Duration, stopCh chan struct{}) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+func (m *RunbookManager) runCron(key string, rb *RunbookConfig, schedule cron.Schedule, stopCh chan struct{}) {
 	for {
+		next := schedule.Next(time.Now())
+		timer := time.NewTimer(time.Until(next))
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			if m.trigger != nil {
 				execID, err := m.trigger(rb, withTriggerSource(nil, TriggerCron))
 				if err != nil {
@@ -294,6 +295,12 @@ func (m *RunbookManager) runCron(key string, rb *RunbookConfig, interval time.Du
 				}
 			}
 		case <-stopCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 			return
 		}
 	}
@@ -349,63 +356,18 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// parseSimpleCron converts a simplified cron expression to a Duration.
-// Supports:
+// parseCron parses a cron trigger expression into a schedule. It accepts:
 //
-//	"*/N * * * *" → every N minutes
-//	"M H * * *"   → daily at H:M (best-effort, computes next run)
-//	"Ns" / "Nm"   → Go duration (shortcut)
+//   - a standard 5-field cron expression (via robfig/cron): "*/N * * * *",
+//     "M H * * *", "M H * * DOW", "M H DOM * *", plus ranges/lists/steps/names;
+//   - a Go duration shortcut ("5m", "30s") for a fixed, unaligned interval.
 //
-// Returns 0 if unparseable.
-func parseSimpleCron(cron string) time.Duration {
-	cron = strings.TrimSpace(cron)
-
-	// Go duration shortcut (non-standard but convenient).
-	if d, err := time.ParseDuration(cron); err == nil {
-		return d
+// The 5-field form uses real cron semantics (time-aligned, dom/dow OR); the
+// duration form fires every d from the first run.
+func parseCron(expr string) (cron.Schedule, error) {
+	expr = strings.TrimSpace(expr)
+	if d, err := time.ParseDuration(expr); err == nil {
+		return cron.ConstantDelaySchedule{Delay: d}, nil
 	}
-
-	parts := strings.Fields(cron)
-	if len(parts) != 5 {
-		return 0
-	}
-
-	// "*/N * * * *" — every N minutes.
-	if strings.HasPrefix(parts[0], "*/") {
-		n := parseInt(strings.TrimPrefix(parts[0], "*/"))
-		if n > 0 && parts[1] == "*" {
-			return time.Duration(n) * time.Minute
-		}
-	}
-
-	// "M H * * *" — daily at H:M. Compute interval as 24h (simplified: we
-	// just run every 24h, ignoring exact time-of-day alignment).
-	min := parseInt(parts[0])
-	hour := parseInt(parts[1])
-	if min >= 0 && hour >= 0 && parts[2] == "*" && parts[3] == "*" && parts[4] == "*" {
-		// For simplicity, treat as "every 24h" — exact time alignment requires
-		// a real cron parser. Good enough for MVP.
-		return 24 * time.Hour
-	}
-
-	// "*/N */M * * *" — every N minutes within every M hours.
-	if strings.HasPrefix(parts[0], "*/") && strings.HasPrefix(parts[1], "*/") {
-		n := parseInt(strings.TrimPrefix(parts[0], "*/"))
-		if n > 0 {
-			return time.Duration(n) * time.Minute
-		}
-	}
-
-	return 0
-}
-
-func parseInt(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return -1
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n
+	return cron.ParseStandard(expr)
 }
