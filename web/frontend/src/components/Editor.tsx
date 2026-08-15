@@ -8,11 +8,7 @@ import { useThemeStore } from '@/store/themeStore'
 import GraphEditor from '@/components/GraphEditor'
 import { workflowToYaml, yamlToWorkflow } from '@/lib/yamlUtils'
 import { registerMonacoThemes } from '@/lib/monacoThemes'
-import { configureMonacoLoader, logCDNSelection } from '@/lib/cdnSelector'
-
-// Configure Monaco to load from optimal CDN with auto-fallback
-configureMonacoLoader()
-logCDNSelection()
+import '@/lib/monacoSetup'
 
 export default function Editor() {
   const { t } = useTranslation()

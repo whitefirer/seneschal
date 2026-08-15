@@ -30,7 +30,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'monaco': ['@monaco-editor/react'],
+          'monaco': ['@monaco-editor/react', 'monaco-editor'],
           'xyflow': ['@xyflow/react', 'dagre'],
           'i18n': ['i18next', 'react-i18next'],
         },
