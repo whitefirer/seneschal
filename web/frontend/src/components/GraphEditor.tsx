@@ -1,6 +1,6 @@
 // 图形编辑器画布：React Flow + 工具栏 + 保存/运行。
 // 数据转换用 lib/stepGraph.ts（透传），节点 UI 用 StepNode.tsx，容器分组用 GroupNode.tsx。
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   ReactFlow, Background, Controls, MiniMap, BackgroundVariant,
   Connection, Edge, Node, MarkerType, useEdgesState,
@@ -152,6 +152,7 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
 export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditorProps) {
   const [rawNodes, setRawNodes] = useState<StepGraphNode[]>([])
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([])
+  const rfInstance = useRef<any>(null)
 
   // 初始化
   useEffect(() => {
@@ -207,17 +208,6 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
     [rawNodes, edges]
   )
 
-  // 小地图节点：加 <title> 悬停提示节点名，便于定位屏幕外节点
-  const minimapNode = useMemo(() => {
-    const nameById = new Map(rawNodes.map((n) => [n.id, n.data.name]))
-    return (props: any) => (
-      <g>
-        <rect x={props.x} y={props.y} width={props.width} height={props.height} rx={props.borderRadius} fill={props.color || '#9ca3af'} />
-        <title>{nameById.get(props.id) || ''}</title>
-      </g>
-    )
-  }, [rawNodes])
-
   const onConnect = useCallback((c: Connection) => {
     if (!c.source || !c.target || c.source === c.target) return
     setEdges((prev) => {
@@ -272,6 +262,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
           nodeTypes={nodeTypes}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onInit={(inst) => { rfInstance.current = inst }}
           fitView
           fitViewOptions={{ padding: 0.2 }}
           deleteKeyCode={['Delete', 'Backspace']}
@@ -281,7 +272,10 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
           <Controls />
           <MiniMap
             position="bottom-right"
-            nodeComponent={minimapNode}
+            onNodeClick={(_, node) => {
+              const pos = node.position || { x: 0, y: 0 }
+              rfInstance.current?.setCenter(pos.x + 110, pos.y + 60, { zoom: 1, duration: 300 })
+            }}
             nodeColor={(node) => {
               const a = node.data?.action as string
               if (a === 'shell') return '#4ade80'
