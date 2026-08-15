@@ -9,7 +9,8 @@ import '@xyflow/react/dist/style.css'
 import { Plus, Save, Play, GitGraph } from 'lucide-react'
 import StepNode, { type StepNodeHandlers } from './StepNode'
 import GroupNode from './GroupNode'
-import { stepsToGraph, graphToSteps, type StepGraphNode, type StepGraphEdge } from '@/lib/stepGraph'
+import { stepsToGraph, graphToSteps, inferLinearEdges, type StepGraphNode, type StepGraphEdge } from '@/lib/stepGraph'
+import { actionDef } from '@/lib/stepSchema'
 
 const nodeTypes = { step: StepNode, group: GroupNode }
 
@@ -35,6 +36,18 @@ function makeNode(data: Record<string, any>, parentId?: string, branchType?: str
       __branchIndex: branchIndex ?? 0,
     },
   }
+}
+
+// 估算节点高度（用于布局，避免重叠）
+function estimateHeight(n: StepGraphNode): number {
+  const def = actionDef(n.data.action)
+  const nFields = def?.fields.length || 0
+  let h = 132 // 头部 + action 下拉 + 后续节点按钮 + 高级 + padding
+  h += nFields * 46
+  if (n.data.action === 'condition' || n.data.action === 'parallel' || n.data.action === 'foreach' || n.data.action === 'loop') {
+    h += 30
+  }
+  return h
 }
 
 // 容器 action → 分支列表
@@ -77,14 +90,14 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
     if (!changed) break
   }
 
-  // 顶层节点 x/y（按深度分列）
-  const yCursor = new Map<number, number>()
+  // 顶层节点 x/y（按深度分列，y 按估算高度堆叠，避免重叠）
+  const colY = new Map<number, number>()
   const topPos = new Map<string, { x: number; y: number }>()
   tops.forEach((n) => {
     const d = depth.get(n.id) ?? 0
-    const y = yCursor.get(d) ?? 0
-    topPos.set(n.id, { x: d * 380, y: y * 200 })
-    yCursor.set(d, y + 1)
+    const y = colY.get(d) ?? 0
+    topPos.set(n.id, { x: d * 380, y })
+    colY.set(d, y + estimateHeight(n) + 40)
   })
 
   const handled = new Set<string>()
@@ -99,21 +112,28 @@ function computeGraph(rawNodes: StepGraphNode[], edges: StepGraphEdge[], handler
         .sort((a, b) => (a.data.__branchIndex ?? 0) - (b.data.__branchIndex ?? 0))
       if (!children.length) continue
       const groupId = top.id + '::' + branch
-      const pad = 16, headerH = 30, gap = 16, cw = 240, ch = 130
+      const pad = 16, headerH = 30, gap = 16, cw = 240
       const gw = cw + pad * 2
-      const gh = headerH + children.length * ch + (children.length - 1) * gap + pad * 2
+      // 子节点按估算高度堆叠
+      const childPos: { c: StepGraphNode; y: number }[] = []
+      let yy = headerH + pad
+      for (const c of children) {
+        childPos.push({ c, y: yy })
+        yy += estimateHeight(c) + gap
+      }
+      const gh = yy + pad
       nodes.push({
         id: groupId, type: 'group', position: { x: base.x + 340, y: gy },
         width: gw, height: gh,
         data: { branch, kind: top.data.action === 'condition' ? 'condition' : top.data.action === 'parallel' ? 'parallel' : 'foreach' },
       })
-      children.forEach((c, i) => {
+      for (const { c, y } of childPos) {
         nodes.push({
           id: c.id, type: 'step', parentId: groupId, extent: 'parent' as const,
-          position: { x: pad, y: headerH + pad + i * (ch + gap) },
+          position: { x: pad, y },
           data: { ...c.data, __handlers: handlers, __upstream: upstreamMap.get(c.id) || [] },
         })
-      })
+      }
       gy += gh + 28
     }
     nodes.push({ id: top.id, type: 'step', position: base, data: { ...top.data, __handlers: handlers, __upstream: upstreamMap.get(top.id) || [] } })
@@ -136,8 +156,9 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
   // 初始化
   useEffect(() => {
     const g = stepsToGraph(initialSteps || [])
+    const allEdges = inferLinearEdges(g.nodes, g.edges)
     setRawNodes(g.nodes)
-    setEdges(g.edges.map((e) => ({
+    setEdges(allEdges.map((e) => ({
       id: e.id, source: e.source, target: e.target, type: 'smoothstep',
       markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
       style: { stroke: '#94a3b8', strokeWidth: 2 },

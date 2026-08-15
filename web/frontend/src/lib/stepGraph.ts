@@ -210,4 +210,30 @@ function topologicalSort(roots: StepGraphNode[], depMap: Map<string, string[]>):
   return [...result, ...rest]
 }
 
+// 推断线性依赖：相邻步骤无显式依赖时按顺序连接（与引擎 inferLinearDependencies 一致）。
+// 跳过 parallel 子节点（默认并行，不做相邻链化）。
+export function inferLinearEdges(nodes: StepGraphNode[], edges: StepGraphEdge[]): StepGraphEdge[] {
+  const result: StepGraphEdge[] = [...edges]
+  const groups = new Map<string, StepGraphNode[]>()
+  for (const n of nodes) {
+    const key = (n.data[META_PARENT] ?? '') + '::' + (n.data[META_BRANCH] ?? '')
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(n)
+  }
+  for (const group of groups.values()) {
+    if (group[0]?.data[META_BRANCH] === 'parallel') continue
+    group.sort((a, b) => (a.data[META_INDEX] ?? 0) - (b.data[META_INDEX] ?? 0))
+    for (let i = 0; i < group.length - 1; i++) {
+      const cur = group[i]
+      const nxt = group[i + 1]
+      const hasEdge = result.some(
+        (e) => (e.source === cur.id && e.target === nxt.id) || (e.source === nxt.id && e.target === cur.id)
+      )
+      if (hasEdge) continue
+      result.push({ id: cur.id + '->' + nxt.id, source: cur.id, target: nxt.id })
+    }
+  }
+  return result
+}
+
 export { CONTAINER_CHILDREN, CONTAINER_KEY_TO_BRANCH }

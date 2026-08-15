@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stepsToGraph, graphToSteps } from './stepGraph'
+import { stepsToGraph, graphToSteps, inferLinearEdges } from './stepGraph'
 
 describe('stepGraph 透传转换', () => {
   it('全字段 + 容器嵌套 round-trip 不丢字段', () => {
@@ -113,5 +113,19 @@ describe('stepGraph 透传转换', () => {
     expect(graphToSteps(stepsToGraph([]).nodes, stepsToGraph([]).edges)).toEqual([])
     const { nodes, edges } = stepsToGraph([{ name: 'p', action: 'parallel', steps: [] }])
     expect(graphToSteps(nodes, edges)).toEqual([{ name: 'p', action: 'parallel' }])
+  })
+
+  it('线性工作流（无显式依赖）推断出顺序边', () => {
+    const steps = [
+      { name: 'a', action: 'log', message: '1' },
+      { name: 'b', action: 'log', message: '2' },
+      { name: 'c', action: 'log', message: '3' },
+    ]
+    const { nodes, edges } = stepsToGraph(steps)
+    const all = inferLinearEdges(nodes, edges)
+    const nameOf = new Map(nodes.map((n) => [n.id, n.data.name]))
+    expect(all.length).toBe(2)
+    expect(all.some((e) => nameOf.get(e.source) === 'a' && nameOf.get(e.target) === 'b')).toBe(true)
+    expect(all.some((e) => nameOf.get(e.source) === 'b' && nameOf.get(e.target) === 'c')).toBe(true)
   })
 })
