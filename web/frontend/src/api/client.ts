@@ -115,6 +115,62 @@ export const executionsApi = {
   },
 }
 
+// ── Runbooks (trigger/schedule) ────────────────────────────────────────────
+
+export interface RunbookTrigger {
+  Type: 'manual' | 'cron' | 'webhook'
+  Cron?: string
+  Path?: string
+}
+
+export interface Runbook {
+  Name: string
+  Workflow: string
+  Triggers: RunbookTrigger[]
+  Variables: Record<string, string>
+  FileName: string
+  FilePath: string
+}
+
+export interface TriggerResponse {
+  status: string
+  runbook?: string
+  path?: string
+  executionId?: string
+}
+
+export const runbooksApi = {
+  list: async (): Promise<Runbook[]> => {
+    const res = await api.get<APIResponse<Runbook[]>>('/runbooks')
+    if (!res.data.success) throw new Error(res.data.error)
+    return res.data.data || []
+  },
+
+  get: async (name: string): Promise<Runbook> => {
+    const res = await api.get<APIResponse<Runbook>>(`/runbooks/${name}`)
+    if (!res.data.success) throw new Error(res.data.error)
+    return res.data.data!
+  },
+
+  save: async (name: string, yaml: string): Promise<void> => {
+    const res = await api.put<APIResponse<{ path: string }>>(`/runbooks/${name}`, yaml, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    })
+    if (!res.data.success) throw new Error(res.data.error)
+  },
+
+  delete: async (name: string): Promise<void> => {
+    const res = await api.delete<APIResponse<null>>(`/runbooks/${name}`)
+    if (!res.data.success) throw new Error(res.data.error)
+  },
+
+  trigger: async (name: string, variables?: Record<string, string>): Promise<TriggerResponse> => {
+    const res = await api.post<APIResponse<TriggerResponse>>(`/runbooks/${name}/trigger`, variables || {})
+    if (!res.data.success) throw new Error(res.data.error)
+    return res.data.data!
+  },
+}
+
 // ── Chat (AI assistant) ────────────────────────────────────────────────────
 
 export interface ChatStep {

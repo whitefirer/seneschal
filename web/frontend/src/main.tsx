@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import App from './App'
 import Dashboard from './components/Dashboard'
 import History from './components/History'
+import Runbooks from './components/Runbooks'
 import '@/i18n' // Initialize i18n
 import './index.css'
 
@@ -36,6 +37,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="dag-new" element={<Suspense fallback={<EditorLoading />}><DAGEditor /></Suspense>} />
           <Route path="execution/:id" element={<Suspense fallback={<EditorLoading />}><Execution /></Suspense>} />
           <Route path="history" element={<History />} />
+          <Route path="runbooks" element={<Runbooks />} />
           <Route path="chat" element={<Suspense fallback={<EditorLoading />}><ChatPanel /></Suspense>} />
         </Route>
       </Routes>
