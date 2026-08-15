@@ -95,13 +95,6 @@ export default function Dashboard() {
               <Plus className="h-4 w-4" />
               {t('dashboard.createWorkflow')}
             </Link>
-            <Link
-              to="/dag-new"
-              className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600 transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              DAG Editor
-            </Link>
           </div>
         </div>
 

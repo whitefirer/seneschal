@@ -1,6 +1,6 @@
 import React, { lazy, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import App from './App'
 import Dashboard from './components/Dashboard'
 import History from './components/History'
@@ -10,9 +10,14 @@ import './index.css'
 
 // Lazy load heavy components — keeps the initial bundle small
 const Editor = lazy(() => import('./components/Editor'))
-const DAGEditor = lazy(() => import('./components/DAGEditor'))
 const Execution = lazy(() => import('./components/Execution'))
 const ChatPanel = lazy(() => import('./components/ChatPanel'))
+
+// 旧 /dag 路由重定向到统一编辑器
+function DagRedirect() {
+  const { name } = useParams<{ name: string }>()
+  return <Navigate to={name ? `/editor/${name}` : '/editor/new'} replace />
+}
 
 // Loading fallback for lazy components
 function EditorLoading() {
@@ -33,8 +38,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <Route path="/" element={<App />}>
           <Route index element={<Dashboard />} />
           <Route path="editor/:name" element={<Suspense fallback={<EditorLoading />}><Editor /></Suspense>} />
-          <Route path="dag/:name" element={<Suspense fallback={<EditorLoading />}><DAGEditor /></Suspense>} />
-          <Route path="dag-new" element={<Suspense fallback={<EditorLoading />}><DAGEditor /></Suspense>} />
+          <Route path="dag/:name" element={<DagRedirect />} />
+          <Route path="dag-new" element={<Navigate to="/editor/new" replace />} />
           <Route path="execution/:id" element={<Suspense fallback={<EditorLoading />}><Execution /></Suspense>} />
           <Route path="history" element={<History />} />
           <Route path="runbooks" element={<Runbooks />} />
