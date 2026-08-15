@@ -15,9 +15,8 @@ import (
 // the security rule that keys never enter workflow YAML and thus never get
 // persisted to disk by SaveWorkflow.
 type Config struct {
-	// Provider selects the backend protocol. Currently only "anthropic"
-	// (covers Claude and DeepSeek via base URL). "openai" and "ollama" are
-	// planned (ROADMAP Phase 8).
+	// Provider selects the backend protocol: "anthropic" (Claude + DeepSeek
+	// via base URL), "openai" (OpenAI-compatible), or "ollama" (local).
 	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 
 	// Model is the default model id for ai/ai_decide steps that do not
