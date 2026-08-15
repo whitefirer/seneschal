@@ -37,6 +37,19 @@ export default function Editor() {
     setEditorTheme(isDark ? 'dark' : 'light')
   }, [isDark])
 
+  const loadWorkflow = useCallback(async () => {
+    try {
+      const wf = await workflowsApi.get(name!)
+      setContent(wf.content)
+      setFileName(wf.fileName)
+    } catch (error) {
+      alert(`${t('editor.loadFailed')}: ${errorMessage(error)}`)
+      navigate('/')
+    } finally {
+      setLoading(false)
+    }
+  }, [name, navigate, t])
+
   useEffect(() => {
     if (!isNew) {
       loadWorkflow()
@@ -57,22 +70,9 @@ steps:
       setFileName('new-workflow.yaml')
       setLoading(false)
     }
-  }, [name])
+  }, [isNew, loadWorkflow])
 
-  const loadWorkflow = async () => {
-    try {
-      const wf = await workflowsApi.get(name!)
-      setContent(wf.content)
-      setFileName(wf.fileName)
-    } catch (error) {
-      alert(`${t('editor.loadFailed')}: ${errorMessage(error)}`)
-      navigate('/')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const saveWorkflow = async () => {
+  const saveWorkflow = useCallback(async () => {
     setSaving(true)
     try {
       let saveName = fileName.replace('.yaml', '').replace('.yml', '')
@@ -110,9 +110,9 @@ steps:
     } finally {
       setSaving(false)
     }
-  }
+  }, [fileName, content, isNew, navigate])
 
-  const runWorkflow = async () => {
+  const runWorkflow = useCallback(async () => {
     // First save
     await saveWorkflow()
     if (validationError) return
@@ -146,7 +146,7 @@ steps:
     } finally {
       setRunning(false)
     }
-  }
+  }, [saveWorkflow, validationError, fileName, navigate, t])
 
   const validateWorkflow = async () => {
     try {

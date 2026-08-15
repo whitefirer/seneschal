@@ -76,7 +76,7 @@ export function WorkflowGraph({ steps, onNodeClick, showMiniMap = true, logLayou
       setCollapsedNodes(autoCollapseIds)
     }
     setAutoCollapseInitialized(true)
-  }, [steps]) // 依赖 steps，但通过 autoCollapseInitialized 确保只执行一次
+  }, [steps, autoCollapseInitialized, setCollapsedNodes]) // autoCollapseInitialized 保证只初始化一次
 
   // 使用外部或内部的锁定状态
   const locked = externalLocked ?? internalLocked
@@ -140,7 +140,7 @@ export function WorkflowGraph({ steps, onNodeClick, showMiniMap = true, logLayou
   const edges = useMemo(() => {
     if (!enrichedSteps || enrichedSteps.length === 0) return []
     return buildEdges(enrichedSteps, isDark)
-  }, [enrichedSteps, collapsedNodes, isDark])
+  }, [enrichedSteps, isDark])
 
   // 基础节点（不含用户拖动后的位置）
   const baseNodes: Node[] = useMemo(() => {
@@ -237,6 +237,9 @@ export function WorkflowGraph({ steps, onNodeClick, showMiniMap = true, logLayou
     })
 
     setNodesState(newNodes)
+    // nodesState 故意不加入依赖：这里需要读取上一次的位置快照，
+    // 加入会形成 setNodesState → 触发 effect → 再次 set 的循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseNodes, draggedNodes])
 
   // 处理节点位置变化（拖动）
@@ -266,13 +269,15 @@ export function WorkflowGraph({ steps, onNodeClick, showMiniMap = true, logLayou
     }))
   }, [edges])
 
-  // 初始 fitView
+  // 初始 fitView（positionedNodes.length 故意不加入依赖：只在挂载后
+  // 尝试一次初始适配，避免后续节点变化反复抢用户的缩放/平移）。
   useEffect(() => {
     if (fitViewRef.current && positionedNodes.length > 0) {
       setTimeout(() => {
         fitViewRef.current?.fitView({ padding: 0.2 })
       }, 100)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 早期返回放在所有 hooks 之后
@@ -367,70 +372,4 @@ export function WorkflowGraph({ steps, onNodeClick, showMiniMap = true, logLayou
       </div>
     </>
   )
-}
-
-// 工具函数
-export function workflowToFlowSteps(workflowSteps: unknown[]): FlowStep[] {
-  return workflowSteps.map((raw, index) => {
-    const step = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
-    const str = (v: unknown, fallback = ''): string => {
-      if (typeof v === 'string') return v
-      if (typeof v === 'number') return String(v)
-      return fallback
-    }
-    const children = Array.isArray(step.children) ? workflowToFlowSteps(step.children) : undefined
-    const stepsChildren = Array.isArray(step.steps) ? workflowToFlowSteps(step.steps) : undefined
-    const doChildren = Array.isArray(step.do) ? workflowToFlowSteps(step.do) : undefined
-    const thenChildren = Array.isArray(step.then_children) ? workflowToFlowSteps(step.then_children) : undefined
-    const elseChildren = Array.isArray(step.else_children) ? workflowToFlowSteps(step.else_children) : undefined
-    const next = Array.isArray(step.next) ? step.next.filter((x): x is string => typeof x === 'string') : undefined
-    const dependsOn = Array.isArray(step.depends_on) ? step.depends_on.filter((x): x is string => typeof x === 'string') : undefined
-    const status = (typeof step.status === 'string' ? step.status : 'pending') as FlowStep['status']
-    const action = str(step.action, str(step.type)) as FlowStep['action']
-
-    return {
-      id: str(step.id, `step-${index}`),
-      name: str(step.name, `Step ${index + 1}`),
-      action,
-      description: str(step.description),
-      status,
-      output: str(step.output),
-      error: str(step.error),
-      duration: str(step.duration),
-      if: str(step.if),
-      loop: str(step.loop),
-      parallel: typeof step.parallel === 'boolean' ? step.parallel : undefined,
-      children: children ||
-        (step.action === 'parallel' ? stepsChildren :
-         ((step.action === 'foreach' || step.action === 'loop') ? doChildren : undefined)),
-      url: str(step.url),
-      method: str(step.method),
-      script: str(step.script),
-      shell: str(step.shell),
-      message: str(step.message),
-      level: str(step.level),
-      run: str(step.run),
-      body: str(step.body),
-      items: Array.isArray(step.items) ? step.items : undefined,
-      itemVar: str(step.item_var),
-      // DAG 字段
-      next,
-      depends_on: dependsOn,
-      join_mode: str(step.join_mode),
-      // Condition 字段
-      expression: str(step.expression),
-      then_children: thenChildren,
-      else_children: elseChildren,
-      condition_result: typeof step.condition_result === 'boolean' ? step.condition_result : null,
-      // Sleep 字段
-      sleepDuration: str(step.sleepDuration, str(step.sleep_duration, str(step.duration))),
-      // Shell 命令
-      shellCommand: str(step.shellCommand, str(step.command, str(step.shell))),
-      // HTTP 信息
-      httpUrl: str(step.httpUrl, str(step.url)),
-      httpMethod: str(step.httpMethod, str(step.method)),
-      // Log 消息
-      logMessage: str(step.logMessage, str(step.message)),
-    }
-  })
 }

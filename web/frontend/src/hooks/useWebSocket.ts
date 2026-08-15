@@ -33,14 +33,20 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const messageHandlerRef = useRef(options.onMessage)
+  const onOpenRef = useRef(options.onOpen)
+  const onErrorRef = useRef(options.onError)
+  const onCloseRef = useRef(options.onClose)
   const [connected, setConnected] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isManualDisconnect = useRef(false)
 
-  // Keep callback ref up to date
+  // Keep callback refs up to date
   useEffect(() => {
     messageHandlerRef.current = options.onMessage
-  }, [options.onMessage])
+    onOpenRef.current = options.onOpen
+    onErrorRef.current = options.onError
+    onCloseRef.current = options.onClose
+  }, [options.onMessage, options.onOpen, options.onError, options.onClose])
 
   const disconnect = useCallback(() => {
     isManualDisconnect.current = true
@@ -74,7 +80,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       ws.onopen = () => {
         setConnected(true)
         setError(null)
-        options.onOpen?.()
+        onOpenRef.current?.()
       }
 
       ws.onmessage = (event) => {
@@ -88,12 +94,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
       ws.onerror = (e) => {
         setError('WebSocket connection error')
-        options.onError?.(e)
+        onErrorRef.current?.(e)
       }
 
       ws.onclose = () => {
         setConnected(false)
-        options.onClose?.()
+        onCloseRef.current?.()
         
         // Only reconnect if not manually disconnected
         if (!isManualDisconnect.current && wsRef.current !== null) {
@@ -105,7 +111,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     } catch (e) {
       setError('Failed to connect: ' + (e as Error).message)
     }
-  }, [options.onOpen, options.onError, options.onClose])
+  }, [])
 
   const subscribe = useCallback((executionId: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -130,7 +136,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     return () => {
       disconnect()
     }
-  }, []) // Only connect once on mount
+  }, [connect, disconnect]) // Only connect once on mount
 
   return {
     connected,

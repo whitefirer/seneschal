@@ -241,4 +241,3 @@ const StepNode = memo(function StepNode({ id, data, selected }: { id: string; da
 })
 
 export default StepNode
-export { actionColor }

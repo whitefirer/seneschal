@@ -3,7 +3,8 @@ import { useParams } from 'react-router-dom'
 import { useWebSocket, type ProgressEvent } from '@/hooks/useWebSocket'
 import { executionsApi } from '@/api/client'
 import { ExecutionChatPanel } from './ExecutionChatPanel'
-import { WorkflowGraph, workflowToFlowSteps, type FlowStep } from '@/components/WorkflowGraph'
+import { WorkflowGraph } from '@/components/WorkflowGraph'
+import { workflowToFlowSteps, type FlowStep } from '@/components/graph/flowTypes'
 import type { RawExecutionStep, Step } from '@/types/execution'
 import {
   appendStepAiToken,
@@ -109,7 +110,7 @@ export default function Execution() {
         }
         break
     }
-  }, [id, workflowName])
+  }, [id, workflowName, workflowFile])
 
   const { subscribe, unsubscribe, connected, disconnect } = useWebSocket({
     onMessage: handleProgress,
@@ -127,7 +128,7 @@ export default function Execution() {
       }
       disconnect()
     }
-  }, [id])
+  }, [id, subscribe, unsubscribe, disconnect])
 
   // Keep steps ref updated
   useEffect(() => {

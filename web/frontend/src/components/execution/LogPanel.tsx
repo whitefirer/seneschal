@@ -112,6 +112,9 @@ export function LogPanel({ logs, layout: logLayout, onLayoutChange: setLogLayout
         setLogPanelPosition(prev => ({ ...prev, x: newPosX }))
       }
     }
+    // logPanelWidth 故意不加入依赖：本 effect 只应在 showTimestamp /
+    // logLayout 切换时重算一次宽度，加入 width 会形成自触发循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTimestamp, logLayout])
 
   // Auto-scroll logs

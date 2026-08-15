@@ -171,7 +171,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
       markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
       style: { stroke: '#94a3b8', strokeWidth: 2 },
     })))
-  }, [initialSteps])
+  }, [initialSteps, setEdges])
 
   // ── 操作（函数式更新，handlers 稳定） ──────────────────────────────
   const handlers: StepNodeHandlers = {
@@ -225,7 +225,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
         style: { stroke: '#94a3b8', strokeWidth: 2 },
       }]
     })
-  }, [])
+  }, [setEdges])
 
   const handleSave = () => {
     const steps = graphToSteps(
