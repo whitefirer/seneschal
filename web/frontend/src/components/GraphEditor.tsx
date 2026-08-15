@@ -159,7 +159,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
     const allEdges = inferLinearEdges(g.nodes, g.edges)
     setRawNodes(g.nodes)
     setEdges(allEdges.map((e) => ({
-      id: e.id, source: e.source, target: e.target, type: 'smoothstep',
+      id: e.id, source: e.source, target: e.target, type: 'default',
       markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
       style: { stroke: '#94a3b8', strokeWidth: 2 },
     })))
@@ -179,9 +179,13 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
     },
     onAddNext: (id) => {
       const childId = nextId()
-      setRawNodes((prev) => [...prev, makeNode({}, undefined, undefined, prev.length)])
+      setRawNodes((prev) => {
+        const child = makeNode({}, undefined, undefined, prev.length)
+        child.id = childId
+        return [...prev, child]
+      })
       setEdges((prev) => [...prev, {
-        id: id + '->' + childId, source: id, target: childId, type: 'smoothstep',
+        id: id + '->' + childId, source: id, target: childId, type: 'default',
         markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
         style: { stroke: '#94a3b8', strokeWidth: 2 },
       }])
@@ -203,12 +207,23 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
     [rawNodes, edges]
   )
 
+  // 小地图节点：加 <title> 悬停提示节点名，便于定位屏幕外节点
+  const minimapNode = useMemo(() => {
+    const nameById = new Map(rawNodes.map((n) => [n.id, n.data.name]))
+    return (props: any) => (
+      <g>
+        <rect x={props.x} y={props.y} width={props.width} height={props.height} rx={props.borderRadius} fill={props.color || '#9ca3af'} />
+        <title>{nameById.get(props.id) || ''}</title>
+      </g>
+    )
+  }, [rawNodes])
+
   const onConnect = useCallback((c: Connection) => {
     if (!c.source || !c.target || c.source === c.target) return
     setEdges((prev) => {
       if (prev.some((e) => e.source === c.source && e.target === c.target)) return prev
       return [...prev, {
-        id: c.source + '->' + c.target, source: c.source, target: c.target, type: 'smoothstep',
+        id: c.source + '->' + c.target, source: c.source, target: c.target, type: 'default',
         markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
         style: { stroke: '#94a3b8', strokeWidth: 2 },
       }]
@@ -266,6 +281,7 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
           <Controls />
           <MiniMap
             position="bottom-right"
+            nodeComponent={minimapNode}
             nodeColor={(node) => {
               const a = node.data?.action as string
               if (a === 'shell') return '#4ade80'
