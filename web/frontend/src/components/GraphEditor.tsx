@@ -242,7 +242,31 @@ export default function GraphEditor({ initialSteps, onSave, onRun }: GraphEditor
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
           <Controls />
-          <MiniMap pannable zoomable />
+          <MiniMap
+            position="bottom-right"
+            nodeColor={(node) => {
+              const a = node.data?.action as string
+              if (a === 'shell') return '#4ade80'
+              if (a === 'http') return '#60a5fa'
+              if (a === 'condition') return '#f59e0b'
+              if (a === 'parallel') return '#a78bfa'
+              if (a === 'foreach' || a === 'loop') return '#22d3ee'
+              if (a === 'ai' || a === 'ai_decide') return '#f472b6'
+              if (a === 'log') return '#fde047'
+              return '#9ca3af'
+            }}
+            maskColor="rgba(0, 0, 0, 0.15)"
+            pannable
+            zoomable
+            style={{
+              width: 160,
+              height: 120,
+              background: 'rgba(255, 255, 255, 0.6)',
+              backdropFilter: 'blur(4px)',
+              borderRadius: '8px',
+            }}
+            className="!border !border-gray-200 dark:!border-gray-700"
+          />
         </ReactFlow>
       </div>
     </div>
