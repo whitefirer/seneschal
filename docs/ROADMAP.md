@@ -172,23 +172,6 @@ seneschal explain deploy.yaml    # 解释这段 YAML 在干嘛
 
 ---
 
-## Phase 11 — Artifact 管理 📋 计划
-
-**目标**:workflow 的执行产物(artifact)可声明、可追踪、可从历史取回。
-
-### 交付
-- [ ] **声明式 artifact**:Step 加 `artifacts: [path...]` 字段,执行后引擎收集这些路径
-- [ ] **ArtifactStore 抽象**(类比 ExecutionStore):文件/对象存储可替换
-- [ ] **历史集成**:ExecutionSnapshot 记录 artifact 元信息(路径、大小、hash、mime)
-- [ ] **重放集成**:deterministic step 复用时,其 artifact 也恢复(原地或从仓库)
-- [ ] **Web 下载**:前端可浏览/下载历史执行的 artifact
-- [ ] **生命周期**:artifact 跟 execution 走(删历史 = 删产物),或独立 TTL
-
-### 为什么独立 Phase
-artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 报告是独立输出格式(`--output html`),不走 artifact 机制。
-
----
-
 ## Phase 6 — 重试与可靠性 ✅ 完成
 
 **目标**:AI provider 偶发错误自动重试 + step 级业务重试。最基础的可靠性保障。
@@ -237,51 +220,26 @@ artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 
 
 ---
 
-## Phase 11.5 — 变量脱敏(敏感数据保护) 📋 计划
+## Phase 8.5 — 加固(测试/mock provider/bundle 优化) ✅ 完成
 
-**目标**:执行者不一定该看到所有变量值(密钥、token、内部配置),展示层脱敏。
+**目标**:补核心引擎测试、mock provider、前端 bundle 优化,提升可靠性。
 
 ### 交付
-- [x] 变量级敏感标记(workflow 级 `sensitive:` 列表,glob 模式;step env 未做)
-- [x] 引擎层不脱敏(执行/落盘/replay 回灌用真实值),展示层脱敏
-- [x] 脱敏位置(部分):HTML 报告/导出 ✅、执行详情 API(变量表 + 内存 Logs 清洗)✅、ask 视图 ✅、chat 确认卡片(sensitiveKeys + 前端显示层)✅、history show ✅;前端执行详情页变量表未做(页面本就不展示变量)
-- [x] 脱敏值显示为 `***`(变量) / `******`(输出文本清洗)(长度可配未做)
-- [ ] 权限分层:`admin`(看明文) vs `executor`(看脱敏)——为未来多用户铺路
-
-### 定位
-和 Phase 7(Token 治理)同属"安全/治理"范畴。在多用户场景(Phase 14 sandbox)之前做展示层脱敏,成本低、价值清晰。
-
-### 用法示例
-```yaml
-- name: transform
-  action: script
-  lang: python
-  code: |
-    import json, sys
-    data = json.load(sys.stdin)
-    result = data["raw"].upper()
-    print(result)
-  save_output: transformed
-```
-
-### 定位
-YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 Phase 14(sandbox)配合用于不可信代码。
+- [x] 核心引擎测试:executor / parser / replay / runbook / mask / hook
+- [x] `mock_provider_test.go` —— 无需真实 LLM 即可测 ai/ai_decide/agent loop
+- [x] 前端 bundle 拆分(776KB → 75KB,lazy load + manualChunks)
+- [x] eslint / vitest / typecheck 门禁(CI)
 
 ---
 
-## Phase 12 — IM 渠道
+## Phase 9 — Tool Use(agent 自主工具循环) ✅ 完成
 
-**目标**:飞书等 IM 触发工作流并实时看结果。
+**目标**:AI step 支持多轮工具调用,自主执行工具直到产出最终答案。
 
 ### 交付
-- [ ] `channels/feishu/` adapter(webhook 入站、卡片出站、签名校验)
-- [ ] `ProgressEvent` → 飞书互动卡片(可更新消息)的翻译层
-- [ ] 飞书长文本结果折叠 / 多卡片拆分策略
-- [ ] 渠道无关的助手接口对外暴露给 adapter
-- [ ] (后续)企业微信 / Slack / Discord adapter
-
-### 复用
-复用 Phase 2(provider)、Phase 3(助手)、Phase 5(实时事件)的全部能力。adapter 只做翻译。
+- [x] `workflow/ai/tools.go` —— ToolExecutor 接口 + AgentEvent
+- [x] `workflow/ai/assistant.go` —— RunAgent 多轮工具循环(maxRounds 防死循环)
+- [x] Anthropic 原生 tool_use 协议;OpenAI/Ollama 回退 plain Complete
 
 ---
 
@@ -330,6 +288,82 @@ YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 
   variables: {env: "{{.env}}", region: "{{.plan.region}}"}
   save_output: deploy_result
 ```
+
+---
+
+## Phase 11a — Ollama provider ✅ 完成
+
+**目标**:本地零配置模型(无 API key、零网络)。
+
+### 交付
+- [x] `workflow/ai/ollama.go` —— `/api/chat` 实现
+- [x] 配置 `provider: ollama` + `OLLAMA_HOST`(默认 localhost:11434)
+- [x] `ollama_test.go` 覆盖
+
+---
+
+## Phase 11 — Artifact 管理 📋 计划
+
+**目标**:workflow 的执行产物(artifact)可声明、可追踪、可从历史取回。
+
+### 交付
+- [ ] **声明式 artifact**:Step 加 `artifacts: [path...]` 字段,执行后引擎收集这些路径
+- [ ] **ArtifactStore 抽象**(类比 ExecutionStore):文件/对象存储可替换
+- [ ] **历史集成**:ExecutionSnapshot 记录 artifact 元信息(路径、大小、hash、mime)
+- [ ] **重放集成**:deterministic step 复用时,其 artifact 也恢复(原地或从仓库)
+- [ ] **Web 下载**:前端可浏览/下载历史执行的 artifact
+- [ ] **生命周期**:artifact 跟 execution 走(删历史 = 删产物),或独立 TTL
+
+### 为什么独立 Phase
+artifact 和执行历史强相关(Phase 4 已完成),但比 M2/M3 复杂。HTML 报告是独立输出格式(`--output html`),不走 artifact 机制。
+
+---
+
+## Phase 11.5 — 变量脱敏(敏感数据保护) 📋 计划
+
+**目标**:执行者不一定该看到所有变量值(密钥、token、内部配置),展示层脱敏。
+
+### 交付
+- [x] 变量级敏感标记(workflow 级 `sensitive:` 列表,glob 模式;step env 未做)
+- [x] 引擎层不脱敏(执行/落盘/replay 回灌用真实值),展示层脱敏
+- [x] 脱敏位置(部分):HTML 报告/导出 ✅、执行详情 API(变量表 + 内存 Logs 清洗)✅、ask 视图 ✅、chat 确认卡片(sensitiveKeys + 前端显示层)✅、history show ✅;前端执行详情页变量表未做(页面本就不展示变量)
+- [x] 脱敏值显示为 `***`(变量) / `******`(输出文本清洗)(长度可配未做)
+- [ ] 权限分层:`admin`(看明文) vs `executor`(看脱敏)——为未来多用户铺路
+
+### 定位
+和 Phase 7(Token 治理)同属"安全/治理"范畴。在多用户场景(Phase 14 sandbox)之前做展示层脱敏,成本低、价值清晰。
+
+### 用法示例
+```yaml
+- name: transform
+  action: script
+  lang: python
+  code: |
+    import json, sys
+    data = json.load(sys.stdin)
+    result = data["raw"].upper()
+    print(result)
+  save_output: transformed
+```
+
+### 定位
+YAML 声明式表达力的补充:复杂逻辑放代码片段,不放 shell。和 Phase 14(sandbox)配合用于不可信代码。
+
+---
+
+## Phase 12 — IM 渠道
+
+**目标**:飞书等 IM 触发工作流并实时看结果。
+
+### 交付
+- [ ] `channels/feishu/` adapter(webhook 入站、卡片出站、签名校验)
+- [ ] `ProgressEvent` → 飞书互动卡片(可更新消息)的翻译层
+- [ ] 飞书长文本结果折叠 / 多卡片拆分策略
+- [ ] 渠道无关的助手接口对外暴露给 adapter
+- [ ] (后续)企业微信 / Slack / Discord adapter
+
+### 复用
+复用 Phase 2(provider)、Phase 3(助手)、Phase 5(实时事件)的全部能力。adapter 只做翻译。
 
 ---
 
