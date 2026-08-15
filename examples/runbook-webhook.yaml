@@ -1,0 +1,21 @@
+# 示例 runbook：通过 webhook 触发一个 workflow。
+#
+# 用法：
+#   1. 复制到 runbooks/：
+#        cp examples/runbook-webhook.yaml runbooks/
+#   2. 外部系统 POST 到触发端点（请求体字段会作为变量注入 workflow）：
+#        curl -X POST http://127.0.0.1:8888/api/triggers/deploy \
+#             -H 'Content-Type: application/json' \
+#             -d '{"env": "staging"}'
+#
+# 注意：path 带前导斜杠，对应触发端点 POST /api/triggers/<path 去掉斜杠>。
+
+name: deploy
+workflow: basic.yaml
+
+triggers:
+  - type: webhook
+    path: /deploy           # 触发端点 POST /api/triggers/deploy
+
+variables:
+  env: staging

@@ -1,0 +1,22 @@
+# 示例 runbook：定时 + 手动触发一个 workflow。
+#
+# 用法：
+#   1. 复制到 runbooks/ 目录（server 启动时自动加载，改动后 10s 内热加载）：
+#        cp examples/runbook-nightly.yaml runbooks/
+#   2. 手动触发：
+#        seneschal runbook trigger nightly
+#        # 或 POST http://127.0.0.1:8888/api/runbooks/nightly/trigger
+#   3. 定时触发：按下方 cron 表达式自动执行。
+#
+# workflow 路径相对 runbooks/ 或 workflows/ 目录解析（默认 workflows/user/）。
+
+name: nightly
+workflow: basic.yaml
+
+triggers:
+  - type: manual
+  - type: cron
+    cron: "*/30 * * * *"   # 每 30 分钟（简化 cron；也支持 Go duration 如 "5m"）
+
+variables:
+  env: prod

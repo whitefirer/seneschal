@@ -450,6 +450,39 @@ hook 是"让用户挂钩自定义逻辑"的通用机制;通知是"最常见场�
 
 ---
 
+## Phase 18 — Runbook（触发/调度/热加载）✅ 完成
+
+**目标**:让 workflow 可以按计划(cron)、按事件(webhook)、按需(manual)触发;runbook 定义文件改动后热加载,无需重启 server。
+
+### 交付
+- [x] `workflow/runbook.go` —— `RunbookManager`:加载 runbook 目录、三种触发(manual/cron/webhook)、cron 调度、`Watch` 轮询热加载
+- [x] `api/runbook_handler.go` —— REST:runbook CRUD + `POST /api/runbooks/{name}/trigger` + webhook `POST /api/triggers/{path}`;触发后异步执行并广播 `runbook_trigger` WS 事件
+- [x] `cmd/cli/runbook.go` —— `seneschal runbook list/show/trigger/create`
+- [x] server 接线(`cmd/server/main.go`):`LoadDir()` + `go Watch(10s)` 热加载
+- [x] 测试:unit(manager/cron)、e2e(CRUD/trigger/webhook/负路径)、路径穿越安全测试
+
+### YAML 形态
+
+```yaml
+name: nightly
+workflow: basic.yaml        # 相对 runbooks/ 或 workflows/ 目录解析
+triggers:
+  - type: manual
+  - type: cron
+    cron: "*/30 * * * *"    # 每 30 分钟;也支持 Go duration 如 "5m"
+  - type: webhook
+    path: /hooks/nightly    # 触发端点 POST /api/triggers/hooks/nightly
+variables:
+  env: prod
+```
+
+### 已知边界
+- **简化 cron**:仅支持 `*/N * * * *`(每 N 分钟)、`M H * * *`(每天,简化为每 24h 起跑)、Go duration;非完整 cron 解析器。
+- **无前端面板**:runbook 目前仅 API + CLI 操作,Web UI 无管理入口。
+- **无内置示例**:`runbooks/` 默认空,参考 `examples/runbook-*.yaml`。
+
+---
+
 ## 原则
 
 1. **YAML 是 source of truth**。所有产物(CLI/前端/IM)都是 YAML 的视图。
