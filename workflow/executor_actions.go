@@ -3,6 +3,7 @@ package workflow
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -93,6 +94,19 @@ func (e *Executor) execTemplate(step Step) (string, error) {
 	outputPath, err := e.context.ResolveTemplate(step.Output)
 	if err != nil {
 		return "", fmt.Errorf("resolve output path: %w", err)
+	}
+
+	// Relative output paths are resolved against the workflow file's directory
+	// when known, and must stay inside it. This stops a workflow YAML from
+	// being able to write arbitrary files outside its own workspace.
+	if !filepath.IsAbs(outputPath) && e.workflowDir != "" {
+		base := filepath.Clean(e.workflowDir)
+		resolved := filepath.Join(base, outputPath)
+		rel, rerr := filepath.Rel(base, resolved)
+		if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			return "", fmt.Errorf("template output escapes workflow directory: %s", outputPath)
+		}
+		outputPath = resolved
 	}
 
 	if e.verbose {

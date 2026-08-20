@@ -43,8 +43,13 @@ func TestTriggerCallback_BroadcastsRunbookTrigger(t *testing.T) {
 	writeTriggerTestWorkflow(t, workflowsDir)
 	store := workflow.NewFileStore(filepath.Join(t.TempDir(), "execs"))
 	hub := NewWSHub() // no Run(): events queue in hub.broadcast
+	handler := NewHandler(hub, workflowsDir, store, workflow.AIConfig{}, nil, nil)
 
-	cb := MakeTriggerCallback(store, hub, workflowsDir, workflow.AIConfig{})
+	cb := MakeTriggerCallback(hub, workflowsDir,
+		func(wf *workflow.Workflow, name, path string, vars map[string]string) (string, error) {
+			return handler.StartRunFromWorkflow(wf, name, path, vars, false)
+		},
+		workflow.AIConfig{})
 	rb := &workflow.RunbookConfig{Name: "nightly", Workflow: "simple.yaml"}
 
 	execID, err := cb(rb, map[string]string{
@@ -54,8 +59,8 @@ func TestTriggerCallback_BroadcastsRunbookTrigger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trigger: %v", err)
 	}
-	if !strings.HasPrefix(execID, "runbook-nightly-") {
-		t.Errorf("execID=%q want runbook-nightly- prefix", execID)
+	if !strings.HasPrefix(execID, "exec-") {
+		t.Errorf("execID=%q want exec- prefix", execID)
 	}
 
 	ev := nextWSEvent(t, hub)
@@ -113,7 +118,11 @@ func TestTriggerCallback_BroadcastsDispatchFailure(t *testing.T) {
 	workflowsDir := t.TempDir() // no workflow files — dispatch must fail
 	hub := NewWSHub()
 
-	cb := MakeTriggerCallback(nil, hub, workflowsDir, workflow.AIConfig{})
+	cb := MakeTriggerCallback(hub, workflowsDir,
+		func(wf *workflow.Workflow, name, path string, vars map[string]string) (string, error) {
+			return "", nil // must not be called: dispatch fails while resolving the workflow
+		},
+		workflow.AIConfig{})
 	rb := &workflow.RunbookConfig{Name: "broken", Workflow: "missing.yaml"}
 
 	execID, err := cb(rb, map[string]string{workflow.TriggerSourceExtraVar: "cron"})
@@ -172,8 +181,14 @@ func TestRunbookTrigger_SourceLabeling(t *testing.T) {
 	}
 
 	hub := NewWSHub()
+	store := workflow.NewFileStore(filepath.Join(t.TempDir(), "execs"))
+	handler := NewHandler(hub, workflowsDir, store, workflow.AIConfig{}, nil, nil)
 	mgr := workflow.NewRunbookManager(runbooksDir, workflowsDir,
-		MakeTriggerCallback(nil, hub, workflowsDir, workflow.AIConfig{}), nil)
+		MakeTriggerCallback(hub, workflowsDir,
+			func(wf *workflow.Workflow, name, path string, vars map[string]string) (string, error) {
+				return handler.StartRunFromWorkflow(wf, name, path, vars, false)
+			},
+			workflow.AIConfig{}), nil)
 	if err := mgr.LoadDir(); err != nil {
 		t.Fatal(err)
 	}

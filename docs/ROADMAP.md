@@ -32,7 +32,7 @@
 | 17 | Hook 与通知(hook/通知渠道) | ✅ 完成 | — |
 | 18 | Runbook(触发/调度/热加载) | ✅ 完成 | — |
 | 19 | E2E 测试(HTTP API + CLI 黑盒) | ✅ 完成 | — |
-| 20 | 前端架构优化(组件拆分/通知系统) | 📋 计划 | 5 |
+| 20 | 前端架构优化(组件拆分/通知系统) | 🚧 进行中 | 5 |
 | 21 | (暂缓)AI 动态编排 | 🅿️ 暂缓 | 全部 |
 
 ---
@@ -284,8 +284,8 @@ seneschal explain deploy.yaml    # 解释这段 YAML 在干嘛
 # 子工作流调用
 - name: deploy
   action: workflow
-  file: deploy.yaml
-  variables: {env: "{{.env}}", region: "{{.plan.region}}"}
+  source: deploy.yaml
+  env: {env: "{{.env}}", region: "{{.plan.region}}"}
   save_output: deploy_result
 ```
 
@@ -506,12 +506,12 @@ variables:
 **目标**:清理前端技术债,提升可维护性。
 
 ### 交付
-- [ ] **JSON tag 统一**(`stepId`/`step_id` 选一种,后端 + 前端同步,删掉双字段兜底)
-- [ ] **Execution.tsx 拆分**(2041 行 → `<StepList>` / `<StepDetail>` / `<LogPanel>`)
+- [x] **JSON tag 统一**(`stepId`/`step_id` 选一种,后端 + 前端同步,删掉双字段兜底)
+- [x] **Execution.tsx 拆分**(2041 行 → `<StepList>` / `<StepDetail>` / `<LogPanel>`)
 - [ ] 全局 toast/error 通知机制(替代散落的 console.error)
 - [ ] 状态字符串常量化(前后端同步)
-- [ ] 历史管理前端 UI(复用 Phase 4 的 history API)
-- [ ] bundle 拆分(当前 766KB 单 chunk,code-split)
+- [x] 历史管理前端 UI(复用 Phase 4 的 history API)
+- [x] bundle 拆分(当前 766KB 单 chunk → 75KB 多 chunk,code-split)
 
 ---
 

@@ -188,6 +188,20 @@ func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
 	// Generate a new execution ID for the replay run.
 	replayID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHex(4))
 
+	// Register the replay run in memory so it is visible while running
+	// (GET /api/executions/{id}) and receives the same WebSocket progress
+	// pipeline as normal runs.
+	wfFile := strings.TrimSuffix(strings.TrimSuffix(snap.WorkflowFile, ".yaml"), ".yml")
+	run := &workflowRun{
+		name:         snap.WorkflowFile,
+		path:         "",
+		wf:           wf,
+		executionID:  replayID,
+		vars:         snap.Variables,
+		workflowYAML: snap.Workflow,
+	}
+	h.registerExecution(run)
+
 	// Build the executor with the replay cache and an AI provider (from env,
 	// so AI steps can re-run). The provider is best-effort: a workflow with
 	// no AI steps needs none.
@@ -202,9 +216,11 @@ func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
 	if p, perr := ai.BuildProvider(h.aiConfig); perr == nil {
 		executor.SetAIProvider(p)
 	}
+	executor.OnProgress = func(event workflow.ProgressEvent) {
+		h.onRunProgress(run, event)
+	}
 
 	// Broadcast start.
-	wfFile := strings.TrimSuffix(strings.TrimSuffix(snap.WorkflowFile, ".yaml"), ".yml")
 	h.hub.Broadcast(WSProgressEvent{
 		Type: "workflow_start", ExecutionID: replayID,
 		WorkflowName: wf.Name, WorkflowFile: wfFile,
@@ -217,35 +233,12 @@ func (h *Handler) ReplayExecution(w http.ResponseWriter, r *http.Request) {
 		"status":      "started",
 	}))
 
-	// Run in background, broadcasting progress like RunWorkflow does.
+	// Run in background, reusing the same reconcile/persist path as normal
+	// runs (which also emits the final workflow_end event).
 	go func() {
 		result := executor.Execute(wf)
-		h.hub.Broadcast(WSProgressEvent{
-			Type: "workflow_end", ExecutionID: replayID,
-			WorkflowName: wf.Name, WorkflowFile: wfFile,
-			Status: result.Status, Error: result.Error,
-			Timestamp: result.EndTime,
-		})
+		h.reconcileExecution(run, result)
 		hits, misses := executor.ReplayStats()
-		// Persist the replay run too.
-		if h.store != nil {
-			_ = h.store.Save(workflow.ExecutionSnapshot{
-				ExecutionSummary: workflow.ExecutionSummary{
-					ID:               replayID,
-					WorkflowName:     wf.Name,
-					WorkflowFile:     wfFile,
-					Status:           result.Status,
-					StartTime:        result.StartTime,
-					EndTime:          result.EndTime,
-					Error:            result.Error,
-					StepsCount:       len(wf.Steps),
-					Nondeterministic: result.Nondeterministic,
-				},
-				Steps:     result.Steps,
-				Variables: result.Variables,
-				Workflow:  snap.Workflow,
-			})
-		}
 		// Log the reuse/re-exec summary via a WS event for visibility.
 		h.hub.Broadcast(WSProgressEvent{
 			Type: "step_output", ExecutionID: replayID,

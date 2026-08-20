@@ -190,7 +190,7 @@ steps:                      # 必填:步骤列表
   output: "config.yaml"     # 输出文件路径
 ```
 
-### `ai` / `ai_decide` - AI 介入 _(Roadmap)_
+### `ai` / `ai_decide` - AI 介入
 
 > 这是 seneschal 区别于其他 YAML 工作流工具的核心差异化能力,详见 [docs/PRODUCT.md](docs/PRODUCT.md)。
 
@@ -208,7 +208,7 @@ steps:                      # 必填:步骤列表
   save_output: is_urgent   # 自动转 bool
 ```
 
-**支持 Anthropic 协议(Claude 原生、DeepSeek `api.deepseek.com/anthropic` 等)与 OpenAI 兼容协议**。API key 只从环境变量读取,绝不写进 YAML。详见 [docs/PRODUCT.md](docs/PRODUCT.md) 的"Provider 架构"。
+**已实现三种 Provider**:Anthropic 协议(Claude 原生、DeepSeek `api.deepseek.com/anthropic` 等)、OpenAI 兼容协议、Ollama 本地模型;支持流式输出、工具调用(tool calling)与 `on_error: ai` 错误分析。API key 只从环境变量读取,绝不写进 YAML。详见 [docs/PRODUCT.md](docs/PRODUCT.md) 的"Provider 架构"。
 
 ## DAG 模式
 

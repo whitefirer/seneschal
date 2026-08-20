@@ -63,6 +63,9 @@ func (e *Executor) execWorkflow(step Step) (string, []StepResult, error) {
 	// Execute the sub-workflow with a fresh executor (isolated context, but
 	// shares the AI provider so model config works).
 	subExecutor := NewExecutor(subVars)
+	// Relative paths inside the sub-workflow resolve against the sub-workflow
+	// file's own directory, not the parent workflow's directory.
+	subExecutor.SetWorkflowDir(filepath.Dir(resolvedPath))
 	// Propagate the cancellation context so quitting the TUI (or another
 	// abort) also stops the sub-workflow's in-flight steps.
 	if e.execCtx != nil {
@@ -106,5 +109,5 @@ func (e *Executor) execWorkflow(step Step) (string, []StepResult, error) {
 	return output, subResult.Steps, nil
 }
 
-// workflowDir is set by Execute to the directory of the workflow file being
-// run, so sub-workflow relative paths resolve correctly.
+// workflowDir is set by callers via SetWorkflowDir to the directory of the
+// workflow file being run, so sub-workflow relative paths resolve correctly.

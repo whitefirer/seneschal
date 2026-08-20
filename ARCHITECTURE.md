@@ -165,27 +165,26 @@ action 由 `workflow/action.go` 的注册表驱动,不再硬编码 switch。每�
 
 `plain` / `rich` / `dag` / `timeline` / `compact` / `tui`(别名 `text`/`fancy`/`graph`/`time`/`ci`/`realtime`/`progress`)。
 
-### 四套 Printer(已知技术债)
+### Printer 统一接口(已完成)
 
 | Printer | 文件 | LOC | 用途 |
 |---|---|---|---|
-| `PrettyPrinter` | `pretty.go` | 308 | legacy ANSI,默认 |
-| `RichPrinter` | `rich_printer.go` | 500 | lipgloss,plain/rich/dag/timeline/compact |
-| `RealtimePrinter` | `realtime_printer.go` | 733 | Bubble Tea TUI |
+| `PrettyPrinter` | `pretty.go` | ~350 | legacy ANSI,默认 |
+| `RichPrinter` | `rich_printer.go` | ~490 | lipgloss,plain/rich/dag/timeline/compact |
+| `RealtimePrinter` | `realtime_printer.go` | ~800 | Bubble Tea TUI |
 | `DAGVisualizer` + `TimelineAnimator` | 各自文件 | — | RichPrinter 的 footer 辅助 |
 
-问题:
-- **无统一接口**:Executor 持有三个 printer 指针,每个调用点都要 `if richPrinter != nil { ... } else if printer != nil { ... }`。
-- **重复**:action→icon map 定义三遍且图标不一致(shell: `💻`/`◇`/`◇`);status→icon 定义两遍;`printFinalResult` 逻辑三份。
-- **状态字符串裸用**:`"success"`/`"completed"`/`"done"` 三种写法并存,printer 靠 `case` 兜底。
-
-**演进方向**:定义 `Printer` interface,Executor 只持一个 `Printer`,printer 内部自己决定渲染。ROADMAP Phase 2 顺手做(因为要给 AI 流式输出新增渲染,不想再抄一份)。
+现状:
+- 已定义统一 `Printer` interface(`workflow/printer.go`),Executor 只持一个 `Printer`。
+- action→icon、status→icon 与 final-result 渲染已抽成共享函数,避免三份漂移。
+- TUI 通过 `Runner` / `EventStreamer` 两个窄接口接入生命周期与事件流,不污染普通 Printer。
+- 状态字符串由 `status.go` 的 `Status*` 常量表达。
 
 ## API 契约
 
 ### REST
 
-所有 `/api` 路由(在 `cmd/server/main.go:81-89` 注册):
+所有 `/api` 路由(在 `api/routes.go` 注册,`cmd/server/main.go` 只负责静态文件与中间件):
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -206,19 +205,19 @@ action 由 `workflow/action.go` 的注册表驱动,不再硬编码 switch。每�
 - 客户端发 `{type: "subscribe"|"unsubscribe", data: {executionId}}`;空 sub 集 = 订阅全部。
 - 服务端推 `WSProgressEvent`:`type ∈ {workflow_start, step_start, step_output, step_complete, workflow_end}`。
 
-> ⚠️ **JSON tag 不一致**(技术债):`LogEntry.StepID` 用 `step_id`(snake),`WSProgressEvent.StepID` 用 `stepId`(camel);`conditionResult`/`condition_result` 同样。前端 `useWebSocket.ts` 两种都接来兜底。ROADMAP 统一成一种。
+JSON 字段统一使用 camelCase:`WSProgressEvent.StepID` 与 `LogEntry.StepID` 均为 `stepId`,`ConditionResult` 为 `conditionResult`。
 
-### 执行编排(`api/handler.go`)
+### 执行编排(`api/run_workflow.go` + `api/execution_handlers.go`)
 
-`RunWorkflow`(~580 行)做三件事:
+`RunWorkflow` / `ReplayExecution` / Chat `run_workflow` / Runbook 触发现在共享同一套执行管道:
 1. 解析 YAML,生成 `exec-YYYYMMDD-HHMMSS-<hex>` ID;
-2. 预构建 `StepResult` 树(含 parallel/foreach/condition 嵌套),注册进内存 `executions` map;
-3. goroutine 里 `executor.Execute(wf)`,进度回调同时推 WS + 更新内存状态。
+2. 预构建 `StepResult` 树(含 parallel/foreach/condition 嵌套),注册进内存 `executions` map(100 条上限,超限淘汰最旧);
+3. goroutine 里 `executor.Execute(wf)`,进度回调同时推 WS + 更新内存状态;
+4. 结束统一 `reconcileExecution`:回写状态、持久化到 `FileStore`、广播 `workflow_end`。
 
-> ⚠️ 已知问题:
-> - **执行历史全内存**,重启即丢(ROADMAP Phase 4 持久化);
-> - `executions` map **无淘汰**,长期运行内存单调上涨;
-> - 580 行 + 三层嵌套递归 reconcile 逻辑,**零测试覆盖**。
+> 已知改进空间:
+> - `executions` 内存缓存有 100 条上限,磁盘历史由 `FileStore` 轮转保留;
+> - `updateStepStatus` / `updateTree` / `findStepDef` / `buildResultMap` 已有单测覆盖,但可继续扩展更多嵌套/foreach 场景。
 
 ## AI 集成架构(Phase 2)
 
@@ -343,48 +342,44 @@ cd web/frontend && npm run dev
 
 `web/frontend/`:React 18 + TypeScript + Vite 5 + TailwindCSS + React Router v6。关键库:`@xyflow/react`(DAG 编辑器)、`@monaco-editor/react`(YAML 编辑器)、Zustand(主题)、i18next(中英)。Vite 构建到 `../static/`,由 Go server `//go:embed`。
 
-> ⚠️ 巨型组件:`Execution.tsx`(2041 行)、`WorkflowGraphEditor.tsx`(1699)、`WorkflowGraph.tsx`(1558)。维护性隐患,计划拆分。
+> 组件已按职责拆分:`Execution.tsx`(~370 行)、`WorkflowGraph.tsx`(~375 行)、`GraphEditor.tsx`(~320 行),并抽出 `execution/StepList*`、`StepDetailPanel`、`LogPanel` 等。`LogPanel.tsx`(~900 行)仍是后续可继续拆分的对象。
 
 ## 安全
 
-⚠️ **当前版本未做鉴权**。设计上定位为本机/可信内网工具。
+⚠️ **当前定位为本机/可信内网工具**,已实现基础安全防线;多用户/公网部署仍需更强隔离。
 
-**已做(Phase 1)**:
+**已做**:
 - `seneschal-server` 默认 bind `127.0.0.1`,不暴露公网;
-- workflow name 路径校验,防 `..` 穿越;
-- WebSocket `CheckOrigin` 收紧。
+- workflow name / runbook workflow 路径校验,防 `..` 穿越;
+- WebSocket `CheckOrigin` + CORS 白名单收紧;
+- 可选 `auth_token` Bearer 鉴权(绑定非 loopback 且未配置时启动打印醒目警告);
+- `http.Server` 超时、请求体大小限制、优雅关闭;
+- 变量/输出脱敏(`sensitive:` 声明)。
 
-**已知未做(ROADMAP)**:
-- 无鉴权 / 授权(多用户场景需要);
-- 无 TLS / HTTP timeout / 优雅关闭;
-- shell action 继承 server 全部环境变量;
-- 无请求体大小限制。
+**已知未做(ROADMAP / 长期)**:
+- 多用户授权与执行隔离;
+- TLS(建议由反向代理终结);
+- 执行沙箱(shell/script/template 仍以服务进程身份运行);
+- template 输出已限制在工作流目录内,但 shell/script 的任意命令能力是设计使然。
 
 **使用约束**:如需远程访问,必须放在带鉴权/TLS/限流的反向代理之后。`shell` action 会以服务进程身份执行任意命令。
 
 ## 测试
 
-当前仅 `workflow/context_test.go`(141 行,覆盖 `Context` 的模板/env/duration)。
-
-**ROADMAP**:补 `InferDependencies`、`executeDAG`(含环检测)、`executeForeach`/`parallel` 的表驱动测试;给 `api/handler.go` 的 reconcile 逻辑补测。引入 `go test -race` 到 CI。
+当前覆盖:
+- Go:`workflow/`(executor/parser/replay/runbook/mask/hook/determinism 等)、`api/`(REST e2e、安全、runbook、replay、step-tree 单测)、`cmd/`(CLI e2e)、`config/`。
+- 前端:Vitest 单测(utils/stepGraph/execution 组件等)。
+- CI:`gofmt`、`go vet`、`go build`、`go test -race`、前端 lint/typecheck/test/build。
 
 ## 已知技术债清单
 
 (按优先级,详见 ROADMAP)
 
-1. 三处 wave 调度逻辑重复(~300 行)——抽 `runWave`
-2. 四套 Printer 无接口——统一 `Printer` interface
-3. ~~`parentId` 共享可变状态~~ ✅ Phase 1 已修(参数化传递,移除 Executor 字段)
-4. ~~变量裸 map 遍历~~ ✅ Phase 1 已修(走 `Snapshot()`)
-5. ~~JSON tag 不一致(`stepId`/`step_id`)~~ ✅ Phase 8.5 已统一(camelCase,删掉前端双字段兜底)
-6. 状态字符串裸用(`"success"`/`"completed"`/`"done"`)——常量化(status.go 已有常量定义,未全量替换)
-7. ~~执行历史全内存、无淘汰~~ ✅ Phase 4 持久化(FileStore + 内存 100 条上限)
-8. `Workflow.Mode` 字段废弃但保留(兼容旧 YAML)
-9. `evaluateExpression` 错误被静默吞(`executor_foreach.go:286,477,497`)
-10. `execShell` 用 `context.Background()` 不可取消
-11. condition 两条执行路径重复
-12. 前端巨型组件(Execution.tsx 2096 行,已 lazy load 拆 chunk,待进一步拆组件)
-13. ~~`hasDAGStructure` 死代码~~ ✅ Phase 1 已删
-14. ~~`execHTTP` 每次新建 client~~ ✅ Phase 1 已复用 `e.httpClient`(per-step context 控超时)
-15. ~~测试覆盖不足~~ ✅ Phase 8.5 补核心引擎测试(executor/parser/replay/mock provider)
-16. ~~前端 bundle 过大~~ ✅ Phase 8.5 拆分(776KB→75KB,lazy load + manualChunks)
+1. `Workflow.Mode` 字段废弃但保留(兼容旧 YAML)
+2. `Step` 是扁平 struct,承载所有 action 字段,后续 action 增多会继续膨胀
+3. `LogPanel.tsx`(~900 行)仍偏大,可继续拆分
+4. 结构化日志/metrics 尚未落地(目前 `log.Printf` / `fmt.Printf` 为主)
+5. ~~Chat/Replay/Runbook 触发未走统一执行管道~~ ✅ 已统一到 `Handler.StartRunFromWorkflow`
+6. `openai` provider 对本地自定义 base_url 允许空 key(官方端点会强制校验)
+7. 执行沙箱(sandbox/WASM/Docker)未做,shell/script 仍以服务进程身份执行
+8. 多用户授权、执行隔离、TLS 终结仍为长期规划

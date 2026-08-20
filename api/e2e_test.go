@@ -45,7 +45,11 @@ func setupE2E(t *testing.T) *e2eTestServer {
 		t.Fatal(err)
 	}
 	runbookMgr := workflow.NewRunbookManager(runbooksDir, dir,
-		MakeTriggerCallback(store, hub, dir, workflow.AIConfig{}), nil)
+		MakeTriggerCallback(hub, dir,
+			func(wf *workflow.Workflow, name, path string, vars map[string]string) (string, error) {
+				return handler.StartRunFromWorkflow(wf, name, path, vars, false)
+			},
+			workflow.AIConfig{}), nil)
 	runbookMgr.LoadDir()
 	runbookHandler := NewRunbookHandler(runbookMgr, runbooksDir, dir)
 

@@ -280,6 +280,16 @@ func (e *Executor) SetDryRun(dry bool) {
 	e.dryRun = dry
 }
 
+// SetWorkflowDir sets the directory of the current workflow file. It is used
+// to resolve relative paths for sub-workflow calls and (optionally) template
+// outputs. Callers that parse a workflow from a file should pass
+// filepath.Dir(path); callers that parse raw YAML without a file can leave it
+// unset, in which case relative paths resolve against the process working
+// directory.
+func (e *Executor) SetWorkflowDir(dir string) {
+	e.workflowDir = dir
+}
+
 // GetContext returns the current execution context.
 func (e *Executor) GetContext() *Context {
 	return e.context

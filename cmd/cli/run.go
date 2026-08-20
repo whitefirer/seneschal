@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -79,6 +80,7 @@ func runWorkflowFile(filePath string) error {
 
 	// Execute
 	executor := workflow.NewExecutor(vars)
+	executor.SetWorkflowDir(filepath.Dir(filePath))
 	executor.SetVerbose(runOpts.verbose)
 	executor.SetDryRun(runOpts.dryRun)
 	executor.SetForceColor(runOpts.forceColor)

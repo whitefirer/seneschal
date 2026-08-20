@@ -207,9 +207,22 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	// 分支选择时的决策。
 	var conditionResult *bool
 	if container.Action == "condition" {
-		// Condition: 根据表达式选择 then 或 else
-		expr, _ := e.context.ResolveTemplate(container.Expression)
-		evalResult, _ := e.evaluateExpression(container.Expression)
+		// Condition: 根据表达式选择 then 或 else。模板/求值失败必须让容器失败,
+		// 不能再静默走 else 分支(否则用户看到成功但分支选错)。
+		expr, err := e.context.ResolveTemplate(container.Expression)
+		if err != nil {
+			stepErr := fmt.Sprintf("condition %q: resolve expression: %v", container.Name, err)
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
+			e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+			return StepResult{Name: container.Name, Action: container.Action, Status: "failed", Error: stepErr}
+		}
+		evalResult, err := e.evaluateExpression(container.Expression)
+		if err != nil {
+			stepErr := fmt.Sprintf("condition %q: evaluate expression %q: %v", container.Name, expr, err)
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
+			e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+			return StepResult{Name: container.Name, Action: container.Action, Status: "failed", Error: stepErr}
+		}
 		conditionResult = &evalResult
 		e.printer.PrintCondition(expr, evalResult)
 		if evalResult {

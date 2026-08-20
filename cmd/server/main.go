@@ -23,6 +23,56 @@ import (
 
 var staticFiles = web.StaticFiles
 
+// resolveDir makes path absolute (relative to the current working directory)
+// and applies the fallback when path is empty. Used for the workflows,
+// executions, and runbooks directories so tests can exercise the same logic
+// without starting the server.
+func resolveDir(path, fallback string) (string, error) {
+	if path == "" {
+		path = fallback
+	}
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(wd, path), nil
+}
+
+// buildWorkflowAIConfig converts the server-level AI config (server.yaml)
+// into the workflow.AIConfig value the API handler expects. Kept separate so
+// it can be unit-tested without starting the server.
+func buildWorkflowAIConfig(cfg *config.ServerConfig) workflow.AIConfig {
+	return workflow.AIConfig{
+		Provider:    cfg.AI.Provider,
+		Model:       cfg.AI.Model,
+		BaseURL:     cfg.AI.BaseURL,
+		MaxTokens:   cfg.AI.MaxTokens,
+		Temperature: cfg.AI.Temperature,
+	}
+}
+
+// buildGlobalHooks converts server-level hooks (server.yaml) into the
+// workflow.HookConfig values the API handler expects.
+func buildGlobalHooks(cfg *config.ServerConfig) []workflow.HookConfig {
+	hooks := make([]workflow.HookConfig, len(cfg.Hooks))
+	for i, h := range cfg.Hooks {
+		hooks[i] = workflow.HookConfig{
+			On:      workflow.HookPhase(h.On),
+			When:    h.When,
+			Type:    h.Type,
+			URL:     h.URL,
+			Message: h.Message,
+			Command: h.Command,
+			Mode:    h.Mode,
+			Prompt:  h.Prompt,
+		}
+	}
+	return hooks
+}
+
 func main() {
 	// Load config
 	configPath := config.ConfigFlag()
@@ -45,11 +95,9 @@ func main() {
 	}
 
 	// Resolve workflows directory
-	workflowsDir := cfg.WorkflowsDir
-	if !filepath.IsAbs(workflowsDir) {
-		if wd, err := os.Getwd(); err == nil {
-			workflowsDir = filepath.Join(wd, workflowsDir)
-		}
+	workflowsDir, err := resolveDir(cfg.WorkflowsDir, "./workflows/user")
+	if err != nil {
+		log.Fatalf("Failed to resolve workflows directory: %v", err)
 	}
 
 	// Create workflows directory if not exists
@@ -77,14 +125,9 @@ func main() {
 	}
 
 	// Resolve executions directory (for persisted history)
-	executionsDir := cfg.ExecutionsDir
-	if executionsDir == "" {
-		executionsDir = "./executions"
-	}
-	if !filepath.IsAbs(executionsDir) {
-		if wd, err := os.Getwd(); err == nil {
-			executionsDir = filepath.Join(wd, executionsDir)
-		}
+	executionsDir, err := resolveDir(cfg.ExecutionsDir, "./executions")
+	if err != nil {
+		log.Fatalf("Failed to resolve executions directory: %v", err)
 	}
 
 	// Create WebSocket hub
@@ -92,14 +135,9 @@ func main() {
 	go hub.Run()
 
 	// Resolve runbooks directory.
-	runbooksDir := cfg.RunbooksDir
-	if runbooksDir == "" {
-		runbooksDir = "./runbooks"
-	}
-	if !filepath.IsAbs(runbooksDir) {
-		if wd, err := os.Getwd(); err == nil {
-			runbooksDir = filepath.Join(wd, runbooksDir)
-		}
+	runbooksDir, err := resolveDir(cfg.RunbooksDir, "./runbooks")
+	if err != nil {
+		log.Fatalf("Failed to resolve runbooks directory: %v", err)
 	}
 	os.MkdirAll(runbooksDir, 0755)
 
@@ -107,32 +145,18 @@ func main() {
 	// survives restarts.
 	store := workflow.NewFileStore(executionsDir)
 	// Convert server-level AI config to workflow.AIConfig for the handler.
-	aiCfg := workflow.AIConfig{
-		Provider:    cfg.AI.Provider,
-		Model:       cfg.AI.Model,
-		BaseURL:     cfg.AI.BaseURL,
-		MaxTokens:   cfg.AI.MaxTokens,
-		Temperature: cfg.AI.Temperature,
-	}
-	// Convert server-level hooks to workflow.HookConfig.
-	globalHooks := make([]workflow.HookConfig, len(cfg.Hooks))
-	for i, h := range cfg.Hooks {
-		globalHooks[i] = workflow.HookConfig{
-			On:      workflow.HookPhase(h.On),
-			When:    h.When,
-			Type:    h.Type,
-			URL:     h.URL,
-			Message: h.Message,
-			Command: h.Command,
-			Mode:    h.Mode,
-			Prompt:  h.Prompt,
-		}
-	}
+	aiCfg := buildWorkflowAIConfig(cfg)
+	globalHooks := buildGlobalHooks(cfg)
 	handler := api.NewHandler(hub, workflowsDir, store, aiCfg, globalHooks, cfg.CheckOrigin())
 
-	// Runbook manager — trigger/schedule management.
+	// Runbook manager — trigger/schedule management. Runbook-triggered
+	// workflows use the same startRun pipeline as REST/chat/replay runs.
 	runbookMgr := workflow.NewRunbookManager(runbooksDir, workflowsDir,
-		api.MakeTriggerCallback(store, hub, workflowsDir, aiCfg),
+		api.MakeTriggerCallback(hub, workflowsDir,
+			func(wf *workflow.Workflow, name, path string, vars map[string]string) (string, error) {
+				return handler.StartRunFromWorkflow(wf, name, path, vars, false)
+			},
+			aiCfg),
 		func(format string, args ...interface{}) { log.Printf(format, args...) },
 	)
 	runbookMgr.LoadDir()

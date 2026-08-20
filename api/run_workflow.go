@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,6 +24,10 @@ type workflowRun struct {
 	dryRun      bool
 	executionID string
 	vars        map[string]string
+	// workflowYAML holds the original workflow YAML when it is not available
+	// from a file on disk (e.g. replay from a stored snapshot). When non-empty
+	// it is preferred for persisting snapshots.
+	workflowYAML string
 }
 
 // RunWorkflow starts a workflow execution in the background and returns the
@@ -131,6 +136,7 @@ func (h *Handler) registerExecution(run *workflowRun) {
 func (h *Handler) startExecution(run *workflowRun) {
 	// Create executor
 	executor := workflow.NewExecutor(run.vars)
+	executor.SetWorkflowDir(filepath.Dir(run.path))
 	executor.SetDryRun(run.dryRun)
 	if len(h.globalHooks) > 0 {
 		executor.SetGlobalHooks(h.globalHooks)
@@ -146,6 +152,28 @@ func (h *Handler) startExecution(run *workflowRun) {
 		result := executor.Execute(run.wf)
 		h.reconcileExecution(run, result)
 	}()
+}
+
+// StartRunFromWorkflow registers and asynchronously starts a run from an
+// already-parsed workflow. It is the shared entry point used by the REST run
+// endpoint's sibling paths, the chat agent's run_workflow tool, and runbook
+// triggers, so every execution gets the same in-memory record, WebSocket
+// progress, and persistence behavior.
+func (h *Handler) StartRunFromWorkflow(wf *workflow.Workflow, name, path string, vars map[string]string, dryRun bool) (string, error) {
+	if wf == nil {
+		return "", fmt.Errorf("cannot start a nil workflow")
+	}
+	run := &workflowRun{
+		name:        name,
+		path:        path,
+		wf:          wf,
+		dryRun:      dryRun,
+		executionID: fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHex(4)),
+		vars:        vars,
+	}
+	h.registerExecution(run)
+	h.startExecution(run)
+	return run.executionID, nil
 }
 
 // onRunProgress handles one executor progress event: broadcast it to
@@ -370,8 +398,11 @@ func (h *Handler) reconcileExecution(run *workflowRun, result *workflow.Workflow
 			Variables: result.Variables,
 		}
 		// Store the original workflow YAML so replays can rebuild the exact
-		// definition even if the file has changed since.
-		if raw, rerr := os.ReadFile(run.path); rerr == nil {
+		// definition even if the file has changed since. Replays already carry
+		// the YAML in memory; file-backed runs read it from disk.
+		if run.workflowYAML != "" {
+			snap.Workflow = run.workflowYAML
+		} else if raw, rerr := os.ReadFile(run.path); rerr == nil {
 			snap.Workflow = string(raw)
 		}
 		// Persist best-effort: a save failure should not fail the request,
@@ -474,6 +505,10 @@ func updateStepStatus(steps []workflow.StepResult, stepID string, event workflow
 		// 然后检查子节点
 		if len(steps[i].Children) > 0 {
 			if updateStepStatus(steps[i].Children, stepID, event) {
+				// 并行容器在首个子步骤开始时即进入 running，而不是等全部子步骤完成。
+				if steps[i].Action == "parallel" && event.Type == "step_start" {
+					steps[i].Status = "running"
+				}
 				// Update parent status based on children
 				allDone := true
 				allSuccess := true

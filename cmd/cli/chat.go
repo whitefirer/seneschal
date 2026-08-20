@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -173,6 +174,7 @@ func chatRun(intent string) error {
 
 	// Execute, reusing the run path.
 	executor := workflow.NewExecutor(vars)
+	executor.SetWorkflowDir(filepath.Dir(chosen.Path))
 	executor.SetVerbose(true)
 	executor.SetOutputMode(workflow.ParseOutputMode(chatOpts.outputMode))
 	executor.SetTheme("default")

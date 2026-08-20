@@ -200,6 +200,7 @@ func runbookTrigger(name string, vars map[string]string, dir, serverURL string) 
 		allVars[k] = v
 	}
 	executor := workflow.NewExecutor(allVars)
+	executor.SetWorkflowDir(filepath.Dir(wfPath))
 	executor.SetVerbose(true)
 	executor.SetOutputMode(workflow.ParseOutputMode("rich"))
 	executor.SetTheme("default")

@@ -116,6 +116,11 @@ func BuildProvider(cfg Config) (Provider, error) {
 		if env := os.Getenv("OPENAI_BASE_URL"); env != "" {
 			baseURL = env
 		}
+		// 官方 OpenAI 端点必须带 key;自定义 base_url(本地 LM Studio / Ollama
+		// OpenAI 兼容模式等)通常不校验 key,允许留空。
+		if apiKey == "" && (baseURL == "" || strings.Contains(baseURL, "api.openai.com")) {
+			return nil, fmt.Errorf("ai provider %q requires an API key: set OPENAI_API_KEY in the environment", provider)
+		}
 		if cfg.Model == "" {
 			return nil, fmt.Errorf("ai provider %q requires a model: set ai.model (e.g. \"gpt-4o\", \"moonshot-v1-8k\", \"glm-4\")", provider)
 		}

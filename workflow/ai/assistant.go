@@ -108,6 +108,9 @@ func (a *Assistant) RunAgent(ctx context.Context, system, userMessage string, to
 	if a.provider == nil {
 		return fmt.Errorf("assistant: no AI provider configured")
 	}
+	if onEvent == nil {
+		onEvent = func(AgentEvent) {}
+	}
 
 	// Try tool-capable path; fall back to plain Complete if provider doesn't
 	// support CompleteRaw (e.g. a mock).

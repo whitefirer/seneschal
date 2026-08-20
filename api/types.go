@@ -81,7 +81,7 @@ type LogEntry struct {
 	Level     string `json:"level"`
 	Message   string `json:"message"`
 	Step      string `json:"step,omitempty"`
-	StepID    string `json:"step_id,omitempty"`
+	StepID    string `json:"stepId,omitempty"`
 }
 
 // WebSocket message types

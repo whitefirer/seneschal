@@ -520,3 +520,23 @@ func TestE2E_RouteTableSmoke(t *testing.T) {
 		})
 	}
 }
+
+// TestE2E_Chat_NoProvider verifies POST /api/chat fails with 503 when no AI
+// provider key is configured — the SSE agent flow itself needs a real model,
+// but the error path is deterministic and protects the route from bit-rot.
+func TestE2E_Chat_NoProvider(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	e := setupE2E(t)
+	defer e.close()
+
+	code, result := e.post("/api/chat", map[string]interface{}{"message": "hello"})
+	if code != 503 {
+		t.Fatalf("status=%d want 503, result=%v", code, result)
+	}
+	if msg, _ := result["error"].(string); !strings.Contains(msg, "AI unavailable") {
+		t.Errorf("expected AI unavailable error, got %q", msg)
+	}
+}

@@ -91,7 +91,7 @@ func (h *Handler) ChatHandler(w http.ResponseWriter, r *http.Request) {
 	exec := &chatToolExecutor{
 		assistant: assistant,
 		registry:  workflow.NewDirRegistry(dir),
-		store:     h.store,
+		handler:   h,
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
@@ -183,7 +183,7 @@ func resolveChatDir(workflowsDir, dir string) (string, error) {
 type chatToolExecutor struct {
 	assistant *ai.Assistant
 	registry  *workflow.DirRegistry
-	store     workflow.ExecutionStore
+	handler   *Handler
 }
 
 func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (string, error) {
@@ -288,41 +288,41 @@ func (e *chatToolExecutor) ExecuteTool(name string, input json.RawMessage) (stri
 		if err != nil {
 			return "", fmt.Errorf("workflow not found: %s", fileName)
 		}
-		executor := workflow.NewExecutor(vars)
-		result := executor.Execute(wf)
-		// Register execution so /api/executions/{id} can find it.
-		execID := fmt.Sprintf("exec-%s-%s", time.Now().Format("20060102-150405"), randomHex(4))
-		// Read raw YAML for snapshot.
-		_, rawYAMLBytes, _ := e.registry.Get(wf.Name)
-		rawYAML := ""
-		if rawYAMLBytes != nil {
-			rawYAML = string(rawYAMLBytes)
+		path, err := e.resolveWorkflowPath(wf.Name)
+		if err != nil {
+			return "", err
 		}
-		snap := workflow.ExecutionSnapshot{
-			ExecutionSummary: workflow.ExecutionSummary{
-				ID:               execID,
-				WorkflowName:     wf.Name,
-				WorkflowFile:     fileName,
-				Status:           result.Status,
-				StartTime:        result.StartTime,
-				EndTime:          result.EndTime,
-				StepsCount:       len(wf.Steps),
-				Nondeterministic: result.Nondeterministic,
-			},
-			Steps:     result.Steps,
-			Variables: result.Variables,
-			Workflow:  rawYAML,
+		if e.handler == nil {
+			return "", fmt.Errorf("chat run_workflow: handler not configured")
 		}
-		if e.store != nil {
-			e.store.Save(snap)
+		execID, err := e.handler.StartRunFromWorkflow(wf, filepath.Base(path), path, vars, false)
+		if err != nil {
+			return "", fmt.Errorf("start workflow: %w", err)
 		}
-		summary := fmt.Sprintf("工作流 %s 执行完成: %s (%d 步)\n执行ID: %s\n[EXEC_ID:%s]",
-			wf.Name, result.Status, len(result.Steps), execID, execID)
+		// 异步启动：返回 executionId，前端/WS 可实时跟踪执行。
+		summary := fmt.Sprintf("工作流 %s 已开始执行 (executionId: %s)\n[EXEC_ID:%s]",
+			wf.Name, execID, execID)
 		return summary, nil
 
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+// resolveWorkflowPath returns the on-disk path for a workflow by name, file
+// name, or file stem, using the registry's cached entry list.
+func (e *chatToolExecutor) resolveWorkflowPath(name string) (string, error) {
+	entries, err := e.registry.List()
+	if err != nil {
+		return "", fmt.Errorf("list workflows: %w", err)
+	}
+	stem := strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
+	for _, entry := range entries {
+		if entry.Name == name || entry.FileName == name || strings.TrimSuffix(strings.TrimSuffix(entry.FileName, ".yaml"), ".yml") == stem {
+			return entry.Path, nil
+		}
+	}
+	return "", fmt.Errorf("workflow %q not found", name)
 }
 
 func candidateList(cs []ai.CandidateEntry) string {

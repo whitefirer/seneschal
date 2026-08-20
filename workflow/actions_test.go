@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -883,4 +885,83 @@ func TestActionForeach_StepOutputEventSymmetry(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCondition_NonBooleanExpressionFails verifies that a condition whose
+// expression evaluates to a non-boolean (e.g. "1 + 1") fails the workflow
+// instead of silently choosing the else branch.
+func TestCondition_NonBooleanExpressionFails(t *testing.T) {
+	e := newQuietExecutor(nil)
+	wf := &Workflow{
+		Name: "condition-invalid",
+		Steps: []Step{{
+			Name: "check", Action: "condition", Expression: "1 + 1",
+			Then: []Step{{Name: "then-branch", Action: "log", Message: "then"}},
+			Else: []Step{{Name: "else-branch", Action: "log", Message: "else"}},
+		}},
+	}
+	result := e.Execute(wf)
+	if result.Status != "failed" {
+		t.Fatalf("workflow status=%s, want failed (err=%s)", result.Status, result.Error)
+	}
+	sr := result.Steps[0]
+	if sr.Status != "failed" {
+		t.Fatalf("condition step status=%s, want failed", sr.Status)
+	}
+	if !strings.Contains(sr.Error, "does not evaluate to boolean") {
+		t.Errorf("condition error=%q, want substring about non-boolean", sr.Error)
+	}
+}
+
+// TestExecTemplate_OutputPathConfinement verifies that relative template
+// outputs are resolved inside the workflow directory, and that ".." escapes
+// are rejected instead of writing outside the workspace.
+func TestExecTemplate_OutputPathConfinement(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "input.tmpl")
+	if err := os.WriteFile(src, []byte("hello {{.name}}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("relative output writes inside workflow dir", func(t *testing.T) {
+		e := newQuietExecutor(map[string]string{"name": "world"})
+		e.SetWorkflowDir(dir)
+		step := Step{Source: src, Output: "out.txt"}
+		if _, err := e.execTemplate(step); err != nil {
+			t.Fatalf("execTemplate: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+		if err != nil {
+			t.Fatalf("read output: %v", err)
+		}
+		if string(data) != "hello world" {
+			t.Errorf("output=%q, want %q", data, "hello world")
+		}
+	})
+
+	t.Run("absolute output is allowed", func(t *testing.T) {
+		e := newQuietExecutor(nil)
+		e.SetWorkflowDir(dir)
+		out := filepath.Join(dir, "abs.txt")
+		step := Step{Source: src, Output: out}
+		if _, err := e.execTemplate(step); err != nil {
+			t.Fatalf("execTemplate: %v", err)
+		}
+		if _, err := os.Stat(out); err != nil {
+			t.Errorf("absolute output not written: %v", err)
+		}
+	})
+
+	t.Run("parent traversal is rejected", func(t *testing.T) {
+		e := newQuietExecutor(nil)
+		e.SetWorkflowDir(dir)
+		step := Step{Source: src, Output: "../escape.txt"}
+		_, err := e.execTemplate(step)
+		if err == nil || !strings.Contains(err.Error(), "escapes workflow directory") {
+			t.Fatalf("expected escape error, got %v", err)
+		}
+		if _, statErr := os.Stat(filepath.Join(filepath.Dir(dir), "escape.txt")); !os.IsNotExist(statErr) {
+			t.Errorf("escape file must not exist, statErr=%v", statErr)
+		}
+	})
 }
