@@ -1,7 +1,10 @@
 package workflow
 
 import (
+	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/whitefirer/seneschal/workflow/ai"
@@ -200,4 +203,47 @@ func TestSumTokenUsage(t *testing.T) {
 
 func delFile(path string) {
 	_ = os.Remove(path)
+}
+
+// step_complete 事件携带失败原因（ProgressEvent.Error 不再恒空）：runner 类
+// 消费方靠它把 stage 失败明细落库（cenacle expect 断言等路径依赖）。
+func TestStepCompleteEventCarriesError(t *testing.T) {
+	registerForTest(t, ActionSpec{
+		Name: "boom_for_event_test",
+		Run: func(e *Executor, step Step, result *StepResult, stepID string, depth int, parentID string) error {
+			return fmt.Errorf("boom-detail")
+		},
+	})
+	e := NewExecutor(nil)
+	var mu sync.Mutex
+	var events []ProgressEvent
+	e.OnProgress = func(ev ProgressEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+	wf := &Workflow{
+		Name: "ev-err",
+		Steps: []Step{
+			{Name: "boom", Action: "boom_for_event_test"},
+		},
+	}
+	result := e.Execute(wf)
+	if result.Status != "failed" {
+		t.Fatalf("status=%s, want failed", result.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, ev := range events {
+		if ev.Type == "step_complete" && ev.Name == "boom" {
+			found = true
+			if !strings.Contains(ev.Error, "boom-detail") {
+				t.Fatalf("step_complete Error=%q, want 含 boom-detail", ev.Error)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("缺 boom 的 step_complete 事件")
+	}
 }

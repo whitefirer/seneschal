@@ -296,7 +296,7 @@ func (e *Executor) GetContext() *Context {
 }
 
 // sendEvent sends a progress event if OnProgress is set.
-func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration string, depth int, parentId string, conditionResult *bool) {
+func (e *Executor) sendEvent(typ, name, stepId, action, status, output, errText, duration string, depth int, parentId string, conditionResult *bool) {
 	event := ProgressEvent{
 		Type:            typ,
 		Name:            name,
@@ -304,6 +304,7 @@ func (e *Executor) sendEvent(typ, name, stepId, action, status, output, duration
 		Action:          action,
 		Status:          status,
 		Output:          output,
+		Error:           errText,
 		Duration:        duration,
 		Depth:           depth,
 		ParentId:        parentId,
@@ -438,7 +439,7 @@ func (e *Executor) Execute(wf *Workflow) *WorkflowResult {
 		e.aiOnErrorMode = "suggest"
 	}
 
-	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", 0, "", nil)
+	e.sendEvent("workflow_start", wf.Name, "", "", "running", "", "", "", 0, "", nil)
 
 	// Store workflow context for hooks.
 	e.workflowName = wf.Name
@@ -556,7 +557,7 @@ func (e *Executor) runWorkflow(wf *Workflow, result *WorkflowResult) *WorkflowRe
 	// 统一使用 DAG 模式执行（线性流程是链式 DAG 的特例）
 	e.executeDAG(wf, result)
 
-	e.sendEvent("workflow_end", wf.Name, "", "", result.Status, result.Error, "", 0, "", nil)
+	e.sendEvent("workflow_end", wf.Name, "", "", result.Status, result.Error, result.Error, "", 0, "", nil)
 
 	// Fire workflow_end hooks. An ai_auto hook may veto the outcome (abort).
 	if hr := e.fireWorkflowHooks(wf, result); hr.Action == "abort" {
@@ -642,7 +643,7 @@ func (e *Executor) executeStepOnce(step Step, depth int, wfResult *WorkflowResul
 	// Print step start with pretty output
 	e.printer.PrintStep(step, depth)
 
-	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, parentID, nil)
+	e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", "", depth, parentID, nil)
 
 	if e.dryRun {
 		result.Status = "skipped"
@@ -670,8 +671,8 @@ func (e *Executor) executeStepOnce(step Step, depth int, wfResult *WorkflowResul
 			c.StartTime = startTime
 			c.EndTime = Now()
 			// Re-emit events so UIs/WS see the step "run" (start + complete).
-			e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", depth, parentID, nil)
-			e.sendEvent("step_complete", step.Name, stepID, step.Action, c.Status, c.Output, c.Duration, depth, parentID, c.ConditionResult)
+			e.sendEvent("step_start", step.Name, stepID, step.Action, "running", "", "", "", depth, parentID, nil)
+			e.sendEvent("step_complete", step.Name, stepID, step.Action, c.Status, c.Output, c.Error, c.Duration, depth, parentID, c.ConditionResult)
 			return c, HookResult{}
 		}
 		e.incReplayMiss()
@@ -786,7 +787,7 @@ errorRecovery:
 				// Partial output is not surfaced for skipped steps.
 				result.Output = ""
 				result.EndTime = Now()
-				e.sendEvent("step_complete", step.Name, stepID, step.Action, "skipped", "", "", depth, parentID, nil)
+				e.sendEvent("step_complete", step.Name, stepID, step.Action, "skipped", "", "", "", depth, parentID, nil)
 				return result, HookResult{}
 			case decision.Action == "abort" && mode == "auto":
 				// Fall through to normal failure handling, but augment error.
@@ -864,11 +865,11 @@ errorRecovery:
 
 	// Send step_output event if there's output
 	if result.Output != "" {
-		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, result.Duration, depth, parentID, nil)
+		e.sendEvent("step_output", step.Name, stepID, step.Action, result.Status, result.Output, "", result.Duration, depth, parentID, nil)
 	}
 
 	// Send step_complete event
-	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Duration, depth, parentID, result.ConditionResult)
+	e.sendEvent("step_complete", step.Name, stepID, step.Action, result.Status, "", result.Error, result.Duration, depth, parentID, result.ConditionResult)
 
 	return result, hookDecision
 }

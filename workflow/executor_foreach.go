@@ -197,7 +197,7 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		containerStepID = fmt.Sprintf("step-%s", strings.ToLower(strings.ReplaceAll(container.Name, " ", "-")))
 	}
 	e.printer.PrintStep(container, depth)
-	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", depth, parentID, nil)
+	e.sendEvent("step_start", container.Name, containerStepID, container.Action, "running", "", "", "", depth, parentID, nil)
 
 	// 根据容器类型收集子节点
 	var children []Step
@@ -212,15 +212,15 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		expr, err := e.context.ResolveTemplate(container.Expression)
 		if err != nil {
 			stepErr := fmt.Sprintf("condition %q: resolve expression: %v", container.Name, err)
-			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
-			e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, stepErr, "", depth, parentID, nil)
+			e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", stepErr, "", depth, parentID, nil)
 			return StepResult{Name: container.Name, Action: container.Action, Status: "failed", Error: stepErr}
 		}
 		evalResult, err := e.evaluateExpression(container.Expression)
 		if err != nil {
 			stepErr := fmt.Sprintf("condition %q: evaluate expression %q: %v", container.Name, expr, err)
-			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
-			e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, stepErr, "", depth, parentID, nil)
+			e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", stepErr, "", depth, parentID, nil)
 			return StepResult{Name: container.Name, Action: container.Action, Status: "failed", Error: stepErr}
 		}
 		conditionResult = &evalResult
@@ -239,12 +239,12 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		// 与 condition/parallel 容器一致,补上容器 step ID(前端/日志按 ID 定位)。
 		sr.ID = containerStepID
 		if sr.Status == "failed" {
-			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", sr.Error, "", depth, parentID, nil)
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", sr.Error, sr.Error, "", depth, parentID, nil)
 		} else if sr.Output != "" {
 			// 与普通步骤一致(executeStepOnce):output 非空才发 step_output。
-			e.sendEvent("step_output", container.Name, containerStepID, container.Action, sr.Status, sr.Output, "", depth, parentID, nil)
+			e.sendEvent("step_output", container.Name, containerStepID, container.Action, sr.Status, sr.Output, sr.Error, "", depth, parentID, nil)
 		}
-		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, sr.Status, "", "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, sr.Status, "", sr.Error, "", depth, parentID, nil)
 		return sr
 	}
 
@@ -257,8 +257,8 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 		// 建图失败也要像常规失败路径一样发出容器完成事件,否则容器步骤在
 		// TUI/WS 上一直显示 running。
 		stepErr := fmt.Sprintf("build child DAG graph: %v", err)
-		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
-		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, stepErr, "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", stepErr, "", depth, parentID, nil)
 		return StepResult{
 			Name:   container.Name,
 			Status: "failed",
@@ -271,8 +271,8 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	if err != nil {
 		// 同上:拓扑排序失败(如子 DAG 成环)也要补发容器完成事件。
 		stepErr := fmt.Sprintf("topological sort child DAG: %v", err)
-		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, "", depth, parentID, nil)
-		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", stepErr, stepErr, "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", stepErr, "", depth, parentID, nil)
 		return StepResult{
 			Name:   container.Name,
 			Status: "failed",
@@ -346,8 +346,8 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 			containerResult.ConditionResult = conditionResult
 		}
 		// Send WebSocket events for container completion
-		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, "", depth, parentID, nil)
-		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", "", depth, parentID, nil)
+		e.sendEvent("step_output", container.Name, containerStepID, container.Action, "failed", firstErr, firstErr, "", depth, parentID, nil)
+		e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "failed", "", firstErr, "", depth, parentID, nil)
 		return containerResult
 	}
 
@@ -386,6 +386,6 @@ func (e *Executor) executeContainerDAG(container Step, depth int, result *Workfl
 	}
 
 	// Send WebSocket events for container completion
-	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", depth, parentID, containerResult.ConditionResult)
+	e.sendEvent("step_complete", container.Name, containerStepID, container.Action, "success", "", "", "", depth, parentID, containerResult.ConditionResult)
 	return containerResult
 }

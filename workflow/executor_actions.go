@@ -48,7 +48,7 @@ func (e *Executor) execSleep(step Step) (string, error) {
 	e.printer.PrintSleep(duration.String())
 
 	// Send sleep start event (progress indicator)
-	e.sendEvent("step_output", step.Name, stepID, "sleep", "running", fmt.Sprintf("Sleeping for %s...", duration.String()), "", 0, "", nil)
+	e.sendEvent("step_output", step.Name, stepID, "sleep", "running", fmt.Sprintf("Sleeping for %s...", duration.String()), "", "", 0, "", nil)
 
 	time.Sleep(duration)
 
